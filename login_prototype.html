@@ -1,0 +1,260 @@
+
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>פנטזי לוזון - כניסה למערכת</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Assistant', sans-serif; background-color: #f3f4f6; }
+        .hidden { display: none; }
+        
+        /* אנימציה עדינה להופעת המסכים */
+        .fade-in { animation: fadeIn 0.4s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen">
+
+    <!-- 1. מסך הכניסה (Login Screen) -->
+    <div id="loginScreen" class="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden fade-in hidden">
+        <!-- Header -->
+        <div class="bg-slate-800 p-8 text-center border-b-4 border-green-500">
+            <h1 class="text-3xl font-black text-white tracking-tight">פנטזי <span class="text-green-400">לוזון</span></h1>
+            <p class="text-gray-400 text-sm mt-1">עונה 13 | מערכת הניהול הרשמית</p>
+        </div>
+
+        <!-- Form -->
+        <form id="loginForm" class="p-8 space-y-6">
+            <!-- הודעת שגיאה -->
+            <div id="errorMsg" class="hidden bg-red-50 border border-red-200 text-red-600 text-sm font-bold p-3 rounded-lg text-center">
+                שגיאה
+            </div>
+
+            <div>
+                <label for="email" class="block text-sm font-bold text-gray-700 mb-1">כתובת אימייל</label>
+                <input type="email" id="email" required 
+                    class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition bg-gray-50"
+                    placeholder="name@example.com">
+            </div>
+
+            <div>
+                <label for="password" class="block text-sm font-bold text-gray-700 mb-1">סיסמה</label>
+                <input type="password" id="password" required 
+                    class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition bg-gray-50"
+                    placeholder="••••••••">
+            </div>
+
+            <div class="flex items-center justify-between">
+                <label class="flex items-center cursor-pointer select-none">
+                    <input type="checkbox" id="rememberMe" checked class="w-4 h-4 text-green-600 rounded border-gray-300 focus:ring-green-500 cursor-pointer accent-green-600">
+                    <span class="mr-2 text-sm text-gray-600 font-semibold">זכור אותי במכשיר זה</span>
+                </label>
+            </div>
+
+            <button type="submit" 
+                class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3.5 rounded-xl shadow-lg transform active:scale-95 transition-all">
+                התחבר למערכת
+            </button>
+        </form>
+        
+        <div class="bg-gray-50 p-4 text-center border-t border-gray-100">
+            <p class="text-sm text-gray-500">אין לך עדיין משתמש? <a href="#" class="font-bold text-green-600 hover:underline">פנה לקוממישינר</a></p>
+        </div>
+    </div>
+
+    <!-- 2. מסך הבית (Dashboard) - סימולציה לאחר כניסה -->
+    <div id="dashboardScreen" class="hidden w-full h-screen flex flex-col fade-in">
+        <!-- סרגל עליון -->
+        <nav class="bg-slate-800 text-white p-4 shadow-lg flex justify-between items-center z-10">
+            <div class="flex items-center gap-3">
+                <span class="font-black text-xl text-green-400 tracking-tight">פנטזי לוזון</span>
+                <span class="bg-slate-700 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider text-gray-300" id="userRoleBadge">Role</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="text-right hidden sm:block">
+                    <div class="text-sm font-bold" id="userNameDisplay">שם משתמש</div>
+                    <div class="text-[10px] text-gray-400">מחובר</div>
+                </div>
+                <button onclick="logout()" class="bg-red-500/10 hover:bg-red-500 hover:text-white text-red-400 border border-red-500/30 text-xs font-bold py-2 px-4 rounded-lg transition">
+                    התנתק
+                </button>
+            </div>
+        </nav>
+
+        <!-- תוכן מרכזי -->
+        <main class="flex-1 p-4 md:p-8 flex flex-col items-center justify-center text-center bg-gray-100">
+            <div class="bg-white p-8 md:p-12 rounded-3xl shadow-xl max-w-2xl w-full border border-gray-100">
+                <div class="text-6xl mb-6 animate-bounce">👋</div>
+                <h2 class="text-3xl font-black text-slate-800 mb-2" id="welcomeTitle">ברוך הבא!</h2>
+                <p class="text-gray-500 text-lg mb-8" id="welcomeMsg">המערכת טוענת את הנתונים שלך...</p>
+                
+                <!-- אזור מנהלים -->
+                <div id="adminControls" class="hidden bg-amber-50 border-2 border-amber-100 p-6 rounded-2xl mb-8 text-right">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-xl">👑</span>
+                        <h3 class="font-black text-amber-900 text-lg">קוקפיט קוממישינר</h3>
+                    </div>
+                    <p class="text-sm text-amber-800 mb-4">יש לך הרשאות מלאות לניהול הליגה, אישור משתמשים ועדכון תוצאות.</p>
+                    <div class="flex gap-2">
+                        <button class="bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold py-2 px-4 rounded-lg shadow-sm transition">ניהול משתמשים</button>
+                        <button class="bg-white border border-amber-200 text-amber-700 text-sm font-bold py-2 px-4 rounded-lg shadow-sm transition hover:bg-amber-50">הגדרות ליגה</button>
+                    </div>
+                </div>
+
+                <!-- כפתורי ניווט -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button class="bg-slate-800 text-white py-4 px-6 rounded-xl font-bold hover:bg-slate-700 shadow-lg hover:shadow-xl transition flex items-center justify-center gap-2 group">
+                        <span>📝</span>
+                        <span>עבור להרכב שלי</span>
+                        <span class="transform group-hover:-translate-x-1 transition">←</span>
+                    </button>
+                    <button class="bg-white text-slate-700 border-2 border-slate-200 py-4 px-6 rounded-xl font-bold hover:bg-slate-50 hover:border-slate-300 transition shadow-sm">
+                        🏆 צפה בטבלה
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- קבועים ---
+        const STORAGE_KEY = 'fantasy_luzon_auth_v13';
+        
+        // --- מסד נתונים לסימולציה (Mock DB) ---
+        const MOCK_DB = [
+            { email: 'admin@luzon.com', pass: '123456', name: 'ערן (קוממישינר)', role: 'admin' },
+            { email: 'user@luzon.com', pass: '123456', name: 'משתמש כללי', role: 'user' }
+        ];
+
+        // --- אלמנטים ---
+        const loginScreen = document.getElementById('loginScreen');
+        const dashboardScreen = document.getElementById('dashboardScreen');
+        const loginForm = document.getElementById('loginForm');
+        const emailInput = document.getElementById('email');
+        const passInput = document.getElementById('password');
+        const rememberMeInput = document.getElementById('rememberMe');
+        const errorMsg = document.getElementById('errorMsg');
+        
+        const userNameDisplay = document.getElementById('userNameDisplay');
+        const userRoleBadge = document.getElementById('userRoleBadge');
+        const welcomeTitle = document.getElementById('welcomeTitle');
+        const welcomeMsg = document.getElementById('welcomeMsg');
+        const adminControls = document.getElementById('adminControls');
+
+        // --- 1. אתחול ובדיקת סשן (Auto Login) ---
+        function init() {
+            // בדיקה ב-LocalStorage (זכור אותי)
+            let session = localStorage.getItem(STORAGE_KEY);
+            
+            // בדיקה ב-SessionStorage (סשן זמני)
+            if (!session) {
+                session = sessionStorage.getItem(STORAGE_KEY);
+            }
+
+            if (session) {
+                // נמצא סשן פעיל
+                const user = JSON.parse(session);
+                showDashboard(user);
+            } else {
+                // לא נמצא סשן - הצג מסך התחברות
+                loginScreen.classList.remove('hidden');
+                
+                // מילוי אוטומטי למטרות בדיקה (אופציונלי)
+                // emailInput.value = 'admin@luzon.com';
+            }
+        }
+
+        // --- 2. לוגיקת התחברות (Login Handler) ---
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = emailInput.value.toLowerCase().trim();
+            const password = passInput.value;
+            const rememberMe = rememberMeInput.checked;
+
+            // חיפוש המשתמש ב"מסד הנתונים"
+            const user = MOCK_DB.find(u => u.email === email && u.pass === password);
+
+            if (user) {
+                // יצירת אובייקט סשן
+                const sessionData = JSON.stringify({
+                    name: user.name,
+                    role: user.role,
+                    email: user.email,
+                    isLoggedIn: true,
+                    loginTime: new Date().toISOString()
+                });
+
+                // שמירה לפי בחירת המשתמש
+                if (rememberMe) {
+                    localStorage.setItem(STORAGE_KEY, sessionData);
+                } else {
+                    sessionStorage.setItem(STORAGE_KEY, sessionData);
+                }
+
+                // מעבר לדאשבורד
+                showDashboard({ name: user.name, role: user.role });
+            } else {
+                // שגיאת התחברות
+                showError('שם המשתמש או הסיסמה שגויים');
+            }
+        });
+
+        function showDashboard(user) {
+            // החלפת מסכים
+            loginScreen.classList.add('hidden');
+            dashboardScreen.classList.remove('hidden');
+
+            // עדכון UI עם פרטי המשתמש
+            userNameDisplay.innerText = user.name;
+            userRoleBadge.innerText = user.role.toUpperCase();
+
+            // התאמה לתפקיד (Role Based UI)
+            if (user.role === 'admin') {
+                welcomeTitle.innerText = `שלום המנהל, ${user.name.split(' ')[0]}`;
+                welcomeMsg.innerText = "הפאנל שלך מוכן לפעולה. מה תרצה לעשות היום?";
+                adminControls.classList.remove('hidden');
+                
+                userRoleBadge.className = "bg-amber-500 text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-bold";
+            } else {
+                welcomeTitle.innerText = `היי ${user.name.split(' ')[0]}!`;
+                welcomeMsg.innerText = "ההרכב שלך מחכה לעדכון לקראת המחזור הקרוב.";
+                adminControls.classList.add('hidden');
+                
+                userRoleBadge.className = "bg-blue-500 text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-bold";
+            }
+        }
+
+        function showError(msg) {
+            errorMsg.innerText = msg;
+            errorMsg.classList.remove('hidden');
+            
+            // איפוס שדות סיסמה
+            passInput.value = '';
+            passInput.focus();
+            
+            // אפקט רעידה
+            loginScreen.classList.add('animate-pulse');
+            setTimeout(() => loginScreen.classList.remove('animate-pulse'), 300);
+        }
+
+        // --- 3. לוגיקת יציאה (Logout) ---
+        window.logout = function() {
+            localStorage.removeItem(STORAGE_KEY);
+            sessionStorage.removeItem(STORAGE_KEY);
+            
+            // אנימציית יציאה
+            dashboardScreen.classList.add('opacity-0', 'transition-opacity', 'duration-300');
+            setTimeout(() => {
+                window.location.reload();
+            }, 300);
+        };
+
+        // הפעלה ראשונית
+        init();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,481 @@
+
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>פנטזי לוזון - סימולטור הרכב</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Assistant', sans-serif; background: #e2e8f0; overflow: hidden; }
+        
+        /* אזור המגרש */
+        .pitch {
+            background: linear-gradient(0deg, #2f9e44 50%, #2b8a3e 50%);
+            background-size: 100% 60px;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.3);
+            position: relative;
+            perspective: 1000px;
+        }
+        
+        /* משבצות המערך (Slots) */
+        .slot {
+            width: 80px; height: 100px;
+            position: absolute; transform: translate(-50%, -50%);
+            border: 2px dashed rgba(255,255,255,0.3);
+            border-radius: 8px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .slot.drag-over { background: rgba(255,255,255,0.2); border-color: #fff; transform: translate(-50%, -50%) scale(1.1); }
+        .slot.error-flash { animation: flashRed 0.5s ease-in-out; }
+
+        @keyframes flashRed {
+            0%, 100% { background: transparent; border-color: rgba(255,255,255,0.3); }
+            50% { background: rgba(239, 68, 68, 0.6); border-color: #ef4444; }
+        }
+
+        /* תגיות עמדה למשבצות */
+        .slot::before { content: attr(data-pos-label); color: rgba(255,255,255,0.5); font-size: 10px; font-weight: bold; margin-bottom: 5px; }
+
+        /* קלף שחקן */
+        .player-card {
+            width: 70px; height: 80px;
+            background: white; border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            display: flex; flex-direction: column; align-items: center; padding: 5px;
+            cursor: grab; user-select: none;
+            transition: transform 0.2s;
+            position: relative; z-index: 10;
+        }
+        .player-card:active { cursor: grabbing; transform: scale(1.05); }
+        .player-card[draggable="false"] { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
+        
+        /* Pitch player hover effect to indicate clickability */
+        .pitch .player-card:hover { transform: scale(1.1); cursor: pointer; border: 2px solid #fbbf24; }
+
+        .jersey {
+            width: 30px; height: 30px; border-radius: 50%;
+            background: #f1f5f9; border: 2px solid #334155;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 10px; color: #334155; margin-bottom: 4px;
+        }
+        .jersey.gk { background: #fbbf24; border-color: #d97706; color: #fff; }
+        
+        .p-name { font-size: 11px; font-weight: 800; line-height: 1; text-align: center; }
+        .p-team { font-size: 9px; color: #64748b; }
+
+        /* מערך 4-3-3 */
+        .pos-gk { bottom: 5%; left: 50%; }
+        .pos-def-1 { bottom: 25%; left: 20%; }
+        .pos-def-2 { bottom: 25%; left: 40%; }
+        .pos-def-3 { bottom: 25%; left: 60%; }
+        .pos-def-4 { bottom: 25%; left: 80%; }
+        .pos-mid-1 { bottom: 50%; left: 30%; }
+        .pos-mid-2 { bottom: 50%; left: 50%; }
+        .pos-mid-3 { bottom: 50%; left: 70%; }
+        .pos-att-1 { bottom: 75%; left: 25%; }
+        .pos-att-2 { bottom: 75%; left: 50%; }
+        .pos-att-3 { bottom: 75%; left: 75%; }
+
+        /* סליידר */
+        input[type=range] {accent-color: #22c55e;}
+        
+        /* הודעות שגיאה (טוסט) */
+        #toast {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            background: #ef4444; color: white; padding: 10px 20px; border-radius: 25px;
+            font-weight: bold; box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100;
+        }
+        #toast.show { opacity: 1; top: 30px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <!-- 1. הלוח העליון -->
+    <header class="bg-slate-800 text-white p-4 shadow-lg z-20">
+        <div class="max-w-6xl mx-auto flex items-center justify-between">
+            <div class="flex items-center gap-6">
+                <h1 class="text-xl font-black text-green-400">Lineup Manager</h1>
+                
+                <!-- סימולציית דקה -->
+                <div class="flex flex-col items-center bg-slate-700 p-2 rounded-lg px-4 border border-slate-600">
+                    <div class="flex justify-between w-full text-xs text-gray-300 mb-1">
+                        <span>דקה: <span id="clockDisplay" class="font-mono font-bold text-white text-lg">0</span></span>
+                        <span id="windowStatus" class="text-green-400 font-bold">חלון פתוח</span>
+                    </div>
+                    <input type="range" id="timeSlider" min="0" max="90" value="0" class="w-48 h-2 bg-slate-500 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <!-- מונה חילופים -->
+                <div class="bg-slate-700 p-2 rounded-lg px-4 border border-slate-600">
+                    <div class="text-xs text-gray-300">חילופים שנותרו</div>
+                    <div id="subsCount" class="font-mono font-bold text-2xl text-center text-yellow-400">3</div>
+                </div>
+            </div>
+
+            <button id="saveBtn" class="bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-6 rounded-lg shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed">
+                שמור הרכב
+            </button>
+        </div>
+    </header>
+
+    <div id="toast">שגיאה</div>
+
+    <!-- PLAYER ACTION MODAL -->
+    <div id="playerModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center animate-fade-in">
+        <div class="bg-white rounded-2xl shadow-2xl p-6 w-80 text-center transform transition-all scale-100 border-4 border-slate-100">
+            <!-- Modal Header -->
+            <div id="modalJersey" class="w-20 h-20 rounded-full mx-auto flex items-center justify-center text-3xl font-black mb-4 border-4 shadow-md text-slate-700 bg-slate-100 border-slate-300">
+                10
+            </div>
+            
+            <h2 id="modalName" class="text-2xl font-black text-slate-800 mb-1 leading-tight">שם השחקן</h2>
+            <div class="flex items-center justify-center gap-2 mb-6">
+                <span class="text-xs font-bold bg-slate-200 px-2 py-1 rounded text-slate-600">POS</span>
+                <span id="modalTeam" class="text-sm font-bold text-slate-500">שם הקבוצה</span>
+            </div>
+
+            <!-- Modal Actions -->
+            <div class="space-y-3">
+                <button id="btnStats" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-200 active:scale-95 transition">
+                    <span>📊</span> צפה בנתונים
+                </button>
+                
+                <button id="btnRemove" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-bold py-3.5 rounded-xl border-2 border-red-100 flex items-center justify-center gap-2 active:scale-95 transition">
+                    <span>🗑️</span> הורד לספסל
+                </button>
+                
+                <button id="btnClose" class="w-full text-gray-400 text-sm font-bold mt-2 hover:text-gray-600 py-2">ביטול</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- גוף האפליקציה -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- 2. המגרש -->
+        <div class="flex-1 pitch relative" id="pitch">
+            <!-- קווי מגרש -->
+            <div class="absolute top-1/2 w-full h-0.5 bg-white/30"></div>
+            <div class="absolute top-1/2 left-1/2 w-32 h-32 border-2 border-white/30 rounded-full transform -translate-x-1/2 -translate-y-1/2"></div>
+            
+            <!-- 11 משבצות (4-3-3) -->
+            <!-- GK -->
+            <div class="slot pos-gk" data-pos="GK" data-pos-label="GK"></div>
+            <!-- DEF -->
+            <div class="slot pos-def-1" data-pos="DEF" data-pos-label="DEF"></div>
+            <div class="slot pos-def-2" data-pos="DEF" data-pos-label="DEF"></div>
+            <div class="slot pos-def-3" data-pos="DEF" data-pos-label="DEF"></div>
+            <div class="slot pos-def-4" data-pos="DEF" data-pos-label="DEF"></div>
+            <!-- MID -->
+            <div class="slot pos-mid-1" data-pos="MID" data-pos-label="MID"></div>
+            <div class="slot pos-mid-2" data-pos="MID" data-pos-label="MID"></div>
+            <div class="slot pos-mid-3" data-pos="MID" data-pos-label="MID"></div>
+            <!-- FWD -->
+            <div class="slot pos-att-1" data-pos="FWD" data-pos-label="FWD"></div>
+            <div class="slot pos-att-2" data-pos="FWD" data-pos-label="FWD"></div>
+            <div class="slot pos-att-3" data-pos="FWD" data-pos-label="FWD"></div>
+        </div>
+
+        <!-- 2. הספסל -->
+        <div class="w-64 bg-slate-100 border-r border-slate-300 shadow-xl z-10 flex flex-col">
+            <div class="p-3 bg-slate-200 font-bold text-slate-700 text-center border-b border-slate-300 shadow-sm">
+                ספסל מחליפים
+            </div>
+            <div class="p-4 space-y-3 overflow-y-auto flex-1" id="bench">
+                <!-- שחקנים יוזרקו כאן ע"י JS -->
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // --- 4. Mock Data ---
+        const PLAYERS = [
+            { id: 'p1', name: 'ג\'ראפי', team: 'הפועל חיפה', pos: 'GK' },
+            { id: 'p2', name: 'ערן זהבי', team: 'מכבי ת"א', pos: 'FWD' },
+            { id: 'p3', name: 'סבוריט', team: 'מכבי ת"א', pos: 'DEF' },
+            { id: 'p4', name: 'דור פרץ', team: 'מכבי ת"א', pos: 'MID' }, 
+            { id: 'p5', name: 'ויטור', team: 'באר שבע', pos: 'DEF' },
+            { id: 'p6', name: 'שרי', team: 'מכבי חיפה', pos: 'MID' },
+            { id: 'p7', name: 'חזיזה', team: 'מכבי חיפה', pos: 'MID' },
+            { id: 'p8', name: 'דין דוד', team: 'מכבי חיפה', pos: 'FWD' }
+        ];
+
+        // --- State ---
+        let gameState = {
+            minute: 0,
+            subsRemaining: 3
+        };
+
+        let selectedPlayerEl = null;
+
+        // --- Elements ---
+        const benchEl = document.getElementById('bench');
+        const slotsEl = document.querySelectorAll('.slot');
+        const timeSlider = document.getElementById('timeSlider');
+        const clockDisplay = document.getElementById('clockDisplay');
+        const subsCountEl = document.getElementById('subsCount');
+        const toastEl = document.getElementById('toast');
+        const windowStatus = document.getElementById('windowStatus');
+        
+        // Modal Elements
+        const modal = document.getElementById('playerModal');
+        const modalName = document.getElementById('modalName');
+        const modalTeam = document.getElementById('modalTeam');
+        const modalJersey = document.getElementById('modalJersey');
+        const btnStats = document.getElementById('btnStats');
+        const btnRemove = document.getElementById('btnRemove');
+        const btnClose = document.getElementById('btnClose');
+
+        // --- Initialization ---
+        function init() {
+            // Render Bench
+            PLAYERS.forEach(p => {
+                const card = createPlayerCard(p);
+                benchEl.appendChild(card);
+            });
+
+            // Listeners
+            timeSlider.addEventListener('input', updateTime);
+            
+            // Drag & Drop Setup
+            document.addEventListener('dragstart', handleDragStart);
+            document.addEventListener('dragend', handleDragEnd);
+
+            // Slot Listeners
+            slotsEl.forEach(slot => {
+                slot.addEventListener('dragover', handleDragOver);
+                slot.addEventListener('dragenter', handleDragEnter);
+                slot.addEventListener('dragleave', handleDragLeave);
+                slot.addEventListener('drop', handleDrop);
+            });
+
+            // Click Listener (Delegation)
+            document.addEventListener('click', handlePlayerClick);
+            
+            // Modal Listeners
+            btnClose.addEventListener('click', closeModal);
+            btnRemove.addEventListener('click', removeSelectedPlayer);
+            btnStats.addEventListener('click', openPlayerStats);
+        }
+
+        // --- Helper: Create Card HTML ---
+        function createPlayerCard(p) {
+            const div = document.createElement('div');
+            div.className = 'player-card';
+            div.draggable = true;
+            div.dataset.id = p.id;
+            div.dataset.team = p.team;
+            div.dataset.pos = p.pos;
+            div.dataset.name = p.name;
+            
+            const jerseyClass = p.pos === 'GK' ? 'jersey gk' : 'jersey';
+            const initial = p.pos === 'GK' ? '1' : p.name.charAt(0);
+
+            div.innerHTML = `
+                <div class="${jerseyClass}">${initial}</div>
+                <div class="p-name">${p.name}</div>
+                <div class="p-team">${p.team}</div>
+            `;
+            return div;
+        }
+
+        // --- 3. The "Brain" (Logic) ---
+
+        function updateTime(e) {
+            const val = parseInt(e.target.value);
+            gameState.minute = val;
+            clockDisplay.innerText = val;
+
+            if (val > 50) {
+                windowStatus.innerText = "חלון סגור 🔒";
+                windowStatus.className = "text-red-500 font-bold";
+            } else {
+                windowStatus.innerText = "חלון פתוח";
+                windowStatus.className = "text-green-400 font-bold";
+            }
+        }
+
+        function showToast(msg) {
+            toastEl.innerText = msg;
+            toastEl.classList.add('show');
+            setTimeout(() => toastEl.classList.remove('show'), 3000);
+        }
+
+        function flashError(element) {
+            element.classList.add('error-flash');
+            setTimeout(() => element.classList.remove('error-flash'), 500);
+        }
+
+        // --- CLICK & MODAL HANDLERS ---
+
+        function handlePlayerClick(e) {
+            const card = e.target.closest('.player-card');
+            // Only respond if we clicked a card AND it is on the PITCH (not bench)
+            if (card && card.closest('.pitch')) {
+                openModal(card);
+            }
+        }
+
+        function openModal(cardElement) {
+            selectedPlayerEl = cardElement;
+            const name = cardElement.dataset.name;
+            const team = cardElement.dataset.team;
+            const pos = cardElement.dataset.pos;
+            const initial = pos === 'GK' ? '1' : name.charAt(0);
+
+            // Populate Modal
+            modalName.innerText = name;
+            modalTeam.innerText = team;
+            
+            // Style Jersey in Modal
+            modalJersey.innerText = initial;
+            if (pos === 'GK') {
+                modalJersey.className = "w-20 h-20 rounded-full mx-auto flex items-center justify-center text-3xl font-black mb-4 border-4 shadow-md text-white bg-yellow-500 border-yellow-600";
+            } else {
+                modalJersey.className = "w-20 h-20 rounded-full mx-auto flex items-center justify-center text-3xl font-black mb-4 border-4 shadow-md text-slate-700 bg-slate-100 border-slate-300";
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            selectedPlayerEl = null;
+        }
+
+        function removeSelectedPlayer() {
+            if (selectedPlayerEl) {
+                // Logic: Move back to bench
+                benchEl.appendChild(selectedPlayerEl);
+                closeModal();
+            }
+        }
+
+        function openPlayerStats() {
+            if (selectedPlayerEl) {
+                const name = selectedPlayerEl.dataset.name;
+                // Create smart search query
+                const query = `site:football.org.il ${name}`;
+                const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+                window.open(url, '_blank');
+            }
+        }
+
+        // --- Drag & Drop Handlers ---
+
+        let draggedCard = null;
+
+        function handleDragStart(e) {
+            if (!e.target.classList.contains('player-card')) return;
+            draggedCard = e.target;
+            e.dataTransfer.setData('text/plain', JSON.stringify({
+                id: draggedCard.dataset.id,
+                team: draggedCard.dataset.team,
+                pos: draggedCard.dataset.pos
+            }));
+            e.dataTransfer.effectAllowed = 'move';
+            setTimeout(() => draggedCard.classList.add('invisible'), 0);
+        }
+
+        function handleDragEnd(e) {
+            if (draggedCard) draggedCard.classList.remove('invisible');
+            draggedCard = null;
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault(); 
+            e.dataTransfer.dropEffect = 'move';
+        }
+
+        function handleDragEnter(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            const slot = e.currentTarget;
+            slot.classList.remove('drag-over');
+
+            if (!draggedCard) return;
+
+            // --- חוקים לפני שחרור (Validation) ---
+
+            // 1. חוק ב' - חלון חילופים
+            if (gameState.minute > 50) {
+                showToast("⛔ החלון נסגר בדקה 50");
+                flashError(slot);
+                return;
+            }
+
+            // 2. חוק ג' - מונה חילופים
+            const isBenchToPitch = draggedCard.parentElement.id === 'bench' && slot.classList.contains('slot');
+            if (gameState.minute > 0 && isBenchToPitch && gameState.subsRemaining <= 0) {
+                showToast("⛔ נגמרו החילופים");
+                flashError(slot);
+                return;
+            }
+
+            // נתוני השחקן הנכנס
+            const incomingTeam = draggedCard.dataset.team;
+            const incomingPos = draggedCard.dataset.pos;
+            const slotPos = slot.dataset.pos;
+
+            // בדיקת עמדה
+            if (incomingPos !== slotPos && slotPos !== undefined) {
+                 showToast(`⛔ עמדה שגויה: זהו מקום ל-${slotPos}`);
+                 flashError(slot);
+                 return;
+            }
+
+            // 3. חוק א' - מגבלת קבוצות (Max 2)
+            const existingPlayerInSlot = slot.querySelector('.player-card');
+            const playersOnPitch = Array.from(document.querySelectorAll('.pitch .player-card'));
+            
+            let teamCount = 0;
+            playersOnPitch.forEach(p => {
+                if (p === existingPlayerInSlot) return;
+                if (p === draggedCard) return;
+
+                if (p.dataset.team === incomingTeam) {
+                    teamCount++;
+                }
+            });
+
+            if (teamCount >= 2) {
+                showToast(`⛔ חריגה: מקסימום 2 שחקני ${incomingTeam}`);
+                flashError(slot);
+                return;
+            }
+
+            // --- ביצוע הפעולה (Success) ---
+            if (existingPlayerInSlot) {
+                benchEl.appendChild(existingPlayerInSlot);
+            }
+
+            slot.appendChild(draggedCard);
+
+            // עדכון מונה חילופים
+            if (gameState.minute > 0 && isBenchToPitch) {
+                gameState.subsRemaining--;
+                subsCountEl.innerText = gameState.subsRemaining;
+                
+                subsCountEl.classList.add('scale-150', 'text-red-500');
+                setTimeout(() => subsCountEl.classList.remove('scale-150', 'text-red-500'), 300);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
