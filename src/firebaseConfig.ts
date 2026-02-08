@@ -1,7 +1,7 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore } from "firebase/firestore"; // חובה בשביל הטבלה
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -19,5 +19,6 @@ const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 
 // Initialize Firestore and Export it
+// השורות האלו קריטיות - הן מאפשרות לשאר האפליקציה לגשת לנתונים
 export const db = getFirestore(app);
 export default app;
