@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore } from "firebase/firestore"; // השורה הזו מייבאת את השירות
 
 const firebaseConfig = {
   apiKey: "AIzaSyAYU35Cc-mewf1WAHjHUAcmq1ATntoU9YI",
@@ -12,5 +12,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+// השורה הזו היא המנוע של הטבלה! בלי זה Firestore לא זמין
+export const db = getFirestore(app); 
 export default app;
