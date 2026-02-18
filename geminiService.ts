@@ -2,7 +2,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 // Fixed: Removed missing and unused export member 'ERAN_STRATEGY_PROMPT' from constants
 import { RAZ_ZEHAVI_PROMPT } from "./constants";
-import { Player, Team, HistoricalMatch } from "./types";
+// Fixed: Changed Match to H2HMatch as Match is not exported from types.ts
+import { Player, Team, H2HMatch } from "./types";
 
 export const generateRazColumn = async () => {
   try {
@@ -59,7 +60,8 @@ export const getScoutingReport = async (playerName: string) => {
   }
 };
 
-export const generatePowerRankings = async (teams: Team[], history: HistoricalMatch[]) => {
+// Fixed: Changed Match type to H2HMatch to match types.ts export
+export const generatePowerRankings = async (teams: Team[], history: H2HMatch[]) => {
   try {
     // Fixed: Create a new GoogleGenAI instance right before making an API call
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
