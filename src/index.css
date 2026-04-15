@@ -1,0 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;700;900&family=Heebo:wght@300;400;500;700;900&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+  @media (max-width: 768px) {
+    html {
+      font-size: 18px;
+    }
+  }
+  body {
+    @apply bg-slate-950 text-slate-100;
+    font-family: 'Rubik', 'Heebo', 'Assistant', 'Inter', ui-sans-serif, system-ui, sans-serif;
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav-fix {
+  bottom: 0 !important;
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom)) !important;
+  height: calc(4.5rem + env(safe-area-inset-bottom)) !important;
+}
