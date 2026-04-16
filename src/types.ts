@@ -44,6 +44,8 @@ export interface Team {
   published_subs_out?: Player[];
   transferHistory?: any[];
   transfers?: any[];
+  cup_lineup?: Player[];
+  cup_bench?: Player[];
 }
 
 export interface User {

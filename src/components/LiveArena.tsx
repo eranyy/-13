@@ -182,7 +182,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         if ((m.h === team1 && m.a === team2) || (m.h === team2 && m.a === team1)) {
           const hs = Number(m.hs) || 0, as = Number(m.as) || 0;
           if (m.h === team1) { t1Goals += hs; t2Goals += as; if (hs > as) t1Wins++; else if (as > hs) t2Wins++; else draws++; }
-          else { t1Goals += as; t2Goals += hs; if (as > hs) t1Wins++; else if (hs > as) t2Wins++; else draws++; }
+          else { t1Goals += as; t2Goals += hs; if (as > hs) t2Wins++; else if (hs > as) t2Wins++; else draws++; }
           pastEncounters.push({ round: r.round, h: m.h, a: m.a, hs, as });
         }
       });
@@ -202,6 +202,43 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       if (outIndex !== -1 && inPlayer) { currentLineup[outIndex] = inPlayer; }
     });
     return currentLineup;
+  };
+
+  // 🟢 פונקציית עזר לחישוב אירועי הלייב של הקבוצה (שערים, צהובים, אדומים) 🟢
+  const getTeamLiveEvents = (teamId: string) => {
+    const team = teams.find(t => t.id === teamId);
+    if (!team) return { goals: 0, yellows: 0, reds: 0 };
+    
+    let goals = 0;
+    let yellows = 0;
+    let reds = 0;
+
+    const currentLineup = applySubstitutionsToLineup(team);
+    
+    currentLineup.forEach((player: any) => {
+        if (player.stats) {
+            goals += (player.stats.goals || 0);
+            if (player.stats.yellow) yellows += 1;
+            if (player.stats.secondYellow) yellows += 1;
+            if (player.stats.red) reds += 1;
+        }
+    });
+
+    // כולל גם שחקנים שיצאו בחילוף מחצית (הסטטיסטיקה שלהם נחשבת לקבוצה)
+    const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+    roundSubs.forEach((sub: any) => {
+        const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
+        const benchedPlayerOut = allPossibleOutPlayers.find((p: any) => p.name === sub.playerOut);
+        
+        if (benchedPlayerOut && benchedPlayerOut.stats) {
+            goals += (benchedPlayerOut.stats.goals || 0);
+            if (benchedPlayerOut.stats.yellow) yellows += 1;
+            if (benchedPlayerOut.stats.secondYellow) yellows += 1;
+            if (benchedPlayerOut.stats.red) reds += 1;
+        }
+    });
+
+    return { goals, yellows, reds };
   };
 
   const shareArenaAsImage = async () => {
@@ -641,9 +678,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       });
       backupData.generatedPostIds.push(zahaviPostRef.id);
 
-      const envApiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || ''; 
-      const localApiKey = localStorage.getItem('gemini_api_key');
-      const activeApiKey = envApiKey || localApiKey;
+      const activeApiKey = process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
 
       if (activeApiKey) {
         try {
@@ -970,25 +1005,54 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             const aScore = calculateTeamScore(match.a);
             const isExpanded = expandedTeamId === match.h || expandedTeamId === match.a;
             
+            // 🟢 חישוב אירועי הלייב של הקבוצות 🟢
+            const hEvents = getTeamLiveEvents(match.h);
+            const aEvents = getTeamLiveEvents(match.a);
+            
             return (
               <div key={idx} className={`bg-slate-900/60 backdrop-blur-md rounded-[32px] border transition-all duration-300 overflow-hidden flex flex-col ${isExpanded ? 'border-slate-500 shadow-[0_0_30px_rgba(255,255,255,0.05)]' : 'border-slate-800 shadow-xl hover:border-slate-700'}`}>
                 
                 <div className="p-0">
                   <div className={`flex items-stretch justify-between w-full h-full min-h-[90px] relative transition-colors ${isExpanded ? 'bg-slate-900/80' : 'hover:bg-slate-800/40'}`}>
                     
+                    {/* --- קבוצת בית --- */}
                     <button onClick={() => toggleTeam(match.h)} className={`flex-1 flex flex-col justify-center items-center md:items-start px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.h ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת בית</span>
                       <span className={`text-lg md:text-2xl font-black ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
                     </button>
 
-                    <div className="shrink-0 flex items-center justify-center gap-3 md:gap-5 bg-slate-950/80 px-4 md:px-8 border-x border-slate-800 relative z-20 shadow-inner">
-                      <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : hScore < aScore ? 'text-slate-500' : 'text-white'}`}>{hScore}</span>
-                      <div className="flex flex-col items-center justify-center">
-                          <span className="text-xl md:text-2xl font-black text-slate-700 pb-1">:</span>
+                    {/* --- לוח התוצאות ואזור האייקונים (כרטיסים/שערים) --- */}
+                    <div className="shrink-0 flex flex-col items-center justify-center bg-slate-950/80 px-4 md:px-8 border-x border-slate-800 relative z-20 shadow-inner py-2">
+                      
+                      {/* אירועי לייב (מעל התוצאה) */}
+                      <div className="flex justify-between w-full px-2 mb-1">
+                          {/* אירועי בית */}
+                          <div className="flex gap-1.5 items-center">
+                              {hEvents.goals > 0 && <span className="flex items-center gap-0.5 text-white text-[10px] font-black"><span className="text-xs">⚽</span>{hEvents.goals}</span>}
+                              {hEvents.yellows > 0 && <span className="flex items-center gap-0.5 text-yellow-400 text-[10px] font-black"><div className="w-1.5 h-2.5 bg-yellow-400 rounded-sm"></div>{hEvents.yellows}</span>}
+                              {hEvents.reds > 0 && <span className="flex items-center gap-0.5 text-red-500 text-[10px] font-black"><div className="w-1.5 h-2.5 bg-red-500 rounded-sm"></div>{hEvents.reds}</span>}
+                          </div>
+
+                          <div className="w-4"></div> {/* מרווח אמצע */}
+
+                          {/* אירועי חוץ */}
+                          <div className="flex gap-1.5 items-center">
+                              {aEvents.reds > 0 && <span className="flex items-center gap-0.5 text-red-500 text-[10px] font-black">{aEvents.reds}<div className="w-1.5 h-2.5 bg-red-500 rounded-sm"></div></span>}
+                              {aEvents.yellows > 0 && <span className="flex items-center gap-0.5 text-yellow-400 text-[10px] font-black">{aEvents.yellows}<div className="w-1.5 h-2.5 bg-yellow-400 rounded-sm"></div></span>}
+                              {aEvents.goals > 0 && <span className="flex items-center gap-0.5 text-white text-[10px] font-black">{aEvents.goals}<span className="text-xs">⚽</span></span>}
+                          </div>
                       </div>
-                      <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : aScore < hScore ? 'text-slate-500' : 'text-white'}`}>{aScore}</span>
+
+                      {/* התוצאה עצמה */}
+                      <div className="flex items-center justify-center gap-3 md:gap-5 w-full">
+                          <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : hScore < aScore ? 'text-slate-500' : 'text-white'}`}>{hScore}</span>
+                          <span className="text-xl md:text-2xl font-black text-slate-700 pb-1">:</span>
+                          <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : aScore < hScore ? 'text-slate-500' : 'text-white'}`}>{aScore}</span>
+                      </div>
+
                     </div>
 
+                    {/* --- קבוצת חוץ --- */}
                     <button onClick={() => toggleTeam(match.a)} className={`flex-1 flex flex-col justify-center items-center md:items-end px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.a ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת חוץ</span>
                       <span className={`text-lg md:text-2xl font-black ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>

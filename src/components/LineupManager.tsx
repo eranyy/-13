@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren } from 'lucide-react';
+import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren, Trophy } from 'lucide-react';
 import { Team, Player, User } from '../types';
 import { db } from '../firebaseConfig';
 import { collection, doc, updateDoc, arrayUnion, onSnapshot, addDoc } from 'firebase/firestore';
@@ -30,7 +30,7 @@ const getTeamColors = (teamName: string, isGK: boolean) => {
   return { prim: '#3b82f6', sec: '#1e3a8a', text: '#ffffff' }; 
 };
 
-// 🟢 מנוע זיהוי השמות האגרסיבי והחדש 🟢
+// מנוע זיהוי השמות האגרסיבי והחדש
 const isTeamMatch = (t1: string, t2: string) => {
     if (!t1 || !t2) return false;
     const normalize = (s: string) => s.replace(/['"״׳.-]/g, '').replace(/\s+/g, '').toLowerCase();
@@ -132,8 +132,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [activeTab, setActiveTab] = useState<'pitch' | 'transfers'>('pitch');
   const [viewMode, setViewMode] = useState<'pitch' | 'list'>('pitch');
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
-  
   const [activeZone, setActiveZone] = useState<'GK' | 'DEF' | 'MID' | 'FWD' | null>(null);
+
+  // 🟢 State למצב גביע: האם המנג'ר כרגע מעדכן הרכב ליגה או גביע?
+  const [isCupModeActive, setIsCupModeActive] = useState<boolean>(false);
 
   const [lineup, setLineup] = useState<Player[]>([]);
   const [bench, setBench] = useState<Player[]>([]);
@@ -162,8 +164,9 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   
   const [adminOverrideData, setAdminOverrideData] = useState<{playersIn: any[], playersOut: any[]} | null>(null);
 
-  // 🟢 State חדש עבור מספרי מחזורי פלייאוף 🟢
   const [playoffRounds, setPlayoffRounds] = useState<number[]>([]);
+  // 🟢 נתוני הגביע מהאדמין
+  const [cupSettings, setCupSettings] = useState<{isOpen: boolean, stage: string, activeTeams: string[]}>({ isOpen: false, stage: 'groups', activeTeams: [] });
 
   const showToast = (msg: string, type: 'error' | 'success' | 'info') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
 
@@ -195,17 +198,26 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       }
     });
 
-    // 🟢 האזנה להגדרות בשביל לטעון את רשימת מחזורי הפלייאוף 🟢
     const unsubSettings = onSnapshot(doc(db, 'leagueData', 'settings'), doc => {
         if(doc.exists() && doc.data().playoffRounds) {
             setPlayoffRounds(doc.data().playoffRounds);
         }
     });
 
-    return () => { unsub(); unsubSettings(); };
+    // מאזינים להגדרות הגביע מהאדמין
+    const unsubCup = onSnapshot(doc(db, 'leagueData', 'cup_settings'), docSnap => {
+        if(docSnap.exists()) {
+            setCupSettings({ 
+                isOpen: docSnap.data().isOpen || false, 
+                stage: docSnap.data().stage || 'groups',
+                activeTeams: docSnap.data().activeTeams || []
+            });
+        }
+    });
+
+    return () => { unsub(); unsubSettings(); unsubCup(); };
   }, []);
 
-  // 🟢 הבדיקה האם אנחנו כרגע במחזור פלייאוף 🟢
   const isPlayoffRound = playoffRounds.includes(currentRound);
 
   const handleSetTeam = (id: string) => {
@@ -243,19 +255,39 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     handleSetTeam(targetTeamId);
   }, [teams, loggedInUser, activeTeamId]);
 
+  // 🟢 Effect שנטען בכל פעם שמחליפים בין "הרכב ליגה" ל"הרכב גביע" 🟢
   useEffect(() => {
     if (activeTeamId) {
       const team = displayTeams.find(t => t.id === activeTeamId);
       if (team) {
         setMyTeam(team);
+        
+        // טעינת הסגל המלא (אותו סגל משמש גם לליגה וגם לגביע)
         const sourceSquad = team.squad || team.players || [];
         const safeSquad: Player[] = Array.from(new Map(
           sourceSquad.filter((p: any) => p && p.id).map((p: any) => [p.id, { ...p, position: normalizePos(p.position) }])
         ).values());
 
-        let startingPlayers = safeSquad.filter(p => p.isStarting === true);
-        const benchPlayers = safeSquad.filter(p => !p.isStarting);
+        let startingPlayers: Player[] = [];
+        let benchPlayers: Player[] = [];
 
+        if (isCupModeActive) {
+            // טעינת הרכב מהגביע
+            startingPlayers = (team.cup_lineup || []).map((p:any) => ({...p, isStarting: true}));
+            benchPlayers = (team.cup_bench || []).map((p:any) => ({...p, isStarting: false}));
+            
+            // אם אין עדיין הרכב גביע, ניקח את ההרכב הרגיל כבסיס התחלתי (אבל נשמור אחר כך לגביע)
+            if (startingPlayers.length === 0 && benchPlayers.length === 0) {
+                startingPlayers = safeSquad.filter(p => p.isStarting === true);
+                benchPlayers = safeSquad.filter(p => !p.isStarting);
+            }
+        } else {
+            // טעינת הרכב ליגה רגיל
+            startingPlayers = safeSquad.filter(p => p.isStarting === true);
+            benchPlayers = safeSquad.filter(p => !p.isStarting);
+        }
+
+        // הגנות במקרה של חריגות
         if (startingPlayers.length > 11) {
           const excess = startingPlayers.splice(11);
           benchPlayers.push(...excess.map(p => ({ ...p, isStarting: false })));
@@ -264,12 +296,18 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         if (startingPlayers.length === 0 && benchPlayers.length === 0 && safeSquad.length > 0) {
           setLineup([]); setBench(safeSquad.sort((a, b) => (POS_ORDER[a.position] || 99) - (POS_ORDER[b.position] || 99)));
         } else {
+          // דואגים ששחקני הספסל יגיעו מסודרים לפי עמדות
+          const allAssignedIds = new Set([...startingPlayers.map(p=>p.id), ...benchPlayers.map(p=>p.id)]);
+          safeSquad.forEach(p => { if (!allAssignedIds.has(p.id)) benchPlayers.push({...p, isStarting: false}); });
+          
           setLineup(startingPlayers); setBench(benchPlayers.sort((a, b) => (POS_ORDER[a.position] || 99) - (POS_ORDER[b.position] || 99)));
         }
+        
+        // יומן העברות תמיד רגיל, גביע לא דורס יומן בשלב זה
         setTransfersLog(team.transfers || []);
       }
     }
-  }, [activeTeamId, teams]);
+  }, [activeTeamId, teams, isCupModeActive]);
 
   const usedTransfers = transfersLog.filter(t => t.type === 'IN').length;
   const freezeCount = transfersLog.filter(t => t.type === 'FREEZE_IN').length;
@@ -284,13 +322,26 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const gks = activeLineup.filter(p => p.position === 'GK').length;
   const currentFormationStr = `${defs}-${mids}-${fwds}`;
   
-  // 🟢 לוגיקת ולידציית מערך - משתנה לפי מצב פלייאוף 🟢
+  // 🟢 לוגיקת ולידציית מערך - חוקים שונים לפי גביע / פלייאוף / ליגה 🟢
   let isFormationValid = false;
-  if (isPlayoffRound) {
-      // בפלייאוף: רק בודקים שאין יותר משוער אחד ושלא חרגו מ-11.
+  
+  if (isCupModeActive) {
+      if (cupSettings.stage === 'groups') {
+          // גביע (בתים/רבע): מותר פחות מ-11, אבל חובה לשמור על תבנית מערך (הבודק אם מה שיש מתאים למערך חוקי כלשהו)
+          const allowedParsed = ALLOWED_FORMATIONS.map(f => {
+              const parts = f.split('-'); return { d: parseInt(parts[0]), m: parseInt(parts[1]), f: parseInt(parts[2]) };
+          });
+          const isValidPath = allowedParsed.some(form => defs <= form.d && mids <= form.m && fwds <= form.f);
+          isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11 && isValidPath;
+      } else {
+          // גביע (חצי גמר / גמר): מותר הכל, ללא חובת מערך, פחות מ-11, למעט שוער 1.
+          isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11;
+      }
+  } else if (isPlayoffRound) {
+      // ליגה בפלייאוף
       isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11;
   } else {
-      // במחזור רגיל: מערך נוקשה
+      // ליגה רגילה
       isFormationValid = activeLineup.length === 11 && ALLOWED_FORMATIONS.includes(currentFormationStr) && gks === 1;
   }
 
@@ -346,12 +397,13 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const checkIsHalftimeSub = (playerName: string) => {
+    if (isCupModeActive) return false; // חילופי מחצית פחות רלוונטיים להגדרת הגביע השבועית
     return transfersLog.some(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED' && t.playerIn === playerName);
   };
 
   const handleWhatsAppShare = () => {
     if (!myTeam) return;
-    let text = `*ההרכב של ${myTeam.teamName} - מחזור ${currentRound}*\n*מערך: ${currentFormationStr}*\n\n`;
+    let text = `*${isCupModeActive ? 'הרכב גביע 🏆' : 'הרכב ליגה ⚽'} - ${myTeam.teamName}*\n*מערך: ${currentFormationStr}*\n\n`;
     
     POS_ARRAY.forEach(pos => {
       const posPlayers = lineup.filter(p => p.position === pos).map(p => {
@@ -370,7 +422,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleCancelSub = async (subId: string) => {
-    if (!isMyTeam || !myTeam) return;
+    if (!isMyTeam || !myTeam || isCupModeActive) return; // לא רלוונטי בגביע עכשיו
     const subToCancel = transfersLog.find(t => t.id === subId);
     if (!subToCancel) return;
 
@@ -443,11 +495,16 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       
       const sameTeamCountInLineup = currentActiveLineup.filter(p => isTeamMatch(p.team, player.team)).length;
       
-      // 🟢 בפלייאוף מותר עד 3. ברגיל מותר עד 2. 🟢
-      const maxAllowedFromTeam = isPlayoffRound ? 3 : 2;
+      // 🟢 הגבלת קבוצות לפי גביע או פלייאוף 🟢
+      let maxAllowedFromTeam = 2; // רגיל
+      if (isCupModeActive) {
+          if (cupSettings.stage === 'semi' || cupSettings.stage === 'final') maxAllowedFromTeam = 3;
+      } else if (isPlayoffRound) {
+          maxAllowedFromTeam = 3;
+      }
       
       if (sameTeamCountInLineup >= maxAllowedFromTeam) {
-        return showToast(`❌ חוק לוזון: אסור יותר מ-${maxAllowedFromTeam} שחקנים מאותה קבוצה (${player.team}) בהרכב הפותח!`, 'error');
+        return showToast(`❌ חוק לוזון: אסור יותר מ-${maxAllowedFromTeam} שחקנים מאותה קבוצה (${player.team}) בהרכב!`, 'error');
       }
 
       const newDefs = currentActiveLineup.filter(p => p.position === 'DEF').length + (player.position === 'DEF' ? 1 : 0);
@@ -457,17 +514,20 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
       if (newGks > 1) return showToast('❌ חוק לוזון: מקסימום שוער 1 בהרכב הפותח!', 'error');
 
-      // 🟢 בדיקת מערך מתבצעת רק אם זה לא פלייאוף 🟢
-      if (!isPlayoffRound) {
+      // 🟢 בדיקת מערך בזמן אמת (רק אם חייבים מערך) 🟢
+      let requireFormationCheck = true;
+      if (isCupModeActive && (cupSettings.stage === 'semi' || cupSettings.stage === 'final')) requireFormationCheck = false;
+      if (!isCupModeActive && isPlayoffRound) requireFormationCheck = false;
+
+      if (requireFormationCheck) {
           const allowedParsed = ALLOWED_FORMATIONS.map(f => {
             const parts = f.split('-');
             return { d: parseInt(parts[0]), m: parseInt(parts[1]), f: parseInt(parts[2]) };
           });
-
           const isValidPath = allowedParsed.some(form => newDefs <= form.d && newMids <= form.m && newFwds <= form.f);
 
           if (!isValidPath) {
-             return showToast(`❌ פעולה חסומה: הכנסת השחקן תיצור מערך לא חוקי!`, 'error');
+             return showToast(`❌ פעולה חסומה: הכנסת השחקן תגרום לחריגה ממערך חוקי!`, 'error');
           }
       }
 
@@ -480,7 +540,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleHalftimeSub = async () => {
-    if (!isMyTeam || !myTeam) return;
+    if (!isMyTeam || !myTeam || isCupModeActive) return showToast('חילופי מחצית זמינים רק למשחקי ליגה!', 'error');
     if (!subOutId || !subInId) return showToast('בחר שחקן יוצא ונכנס', 'error');
     
     const activeSubs = transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
@@ -501,7 +561,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       const testFormation = `${newLineup.filter(p => p.position === 'DEF').length}-${newLineup.filter(p => p.position === 'MID').length}-${newLineup.filter(p => p.position === 'FWD').length}`;
       if (newLineup.filter(p => p.position === 'GK').length !== 1) return showToast('חייב להישאר שוער אחד!', 'error');
       
-      // 🟢 מערך מחצית נבדק רק אם לא פלייאוף 🟢
       if (!isPlayoffRound && !ALLOWED_FORMATIONS.includes(testFormation)) return showToast(`מערך ${testFormation} לא חוקי.`, 'error');
       
       const teamCounts: Record<string, number> = {}; let teamViolation = false;
@@ -514,7 +573,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         if (teamCounts[foundKey] > maxAllowedFromTeam) teamViolation = true; 
       });
 
-      if (teamViolation) return showToast(`❌ חוק לוזון: מקסימום ${maxAllowedFromTeam} שחקנים מאותה קבוצה (${playerIn.team}) בהרכב הפותח!`, 'error');
+      if (teamViolation) return showToast(`❌ חוק לוזון: מקסימום ${maxAllowedFromTeam} שחקנים מאותה קבוצה (${playerIn.team}) בהרכב!`, 'error');
 
       const newBench = [...bench.filter(p => p.id !== subInId), pOutUpdated].sort((a, b) => POS_ORDER[a.position] - POS_ORDER[b.position]);
       
@@ -555,17 +614,19 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleSaveLineup = async () => {
-    // 🟢 בפלייאוף נתיר שמירה כל עוד isFormationValid אמת (למשל פחות מ-11) 🟢
     if (!isMyTeam || !myTeam || !isFormationValid) return;
     
-    // אם לא פלייאוף, אז חייבים 11. 
-    if (!isPlayoffRound && activeLineup.length !== 11) return;
+    // ולידציה סופית: אם ליגה רגילה, חובה 11. 
+    if (!isCupModeActive && !isPlayoffRound && activeLineup.length !== 11) return;
     
-    const oldLineupNames = new Set((myTeam.published_lineup || []).map((p: any) => p.name));
+    // בודקים אילו שחקנים נכנסו/יצאו מול מה שכבר היה שומר במערכת באותו מוד
+    const previousLineup = isCupModeActive ? (myTeam.cup_lineup || []) : (myTeam.published_lineup || []);
+    
+    const oldLineupNames = new Set(previousLineup.map((p: any) => p.name));
     const newLineupNames = new Set(activeLineup.map(p => p.name));
 
     const playersIn = activeLineup.filter(p => !oldLineupNames.has(p.name));
-    const playersOut = (myTeam.published_lineup || []).filter((p: any) => !newLineupNames.has(p.name));
+    const playersOut = previousLineup.filter((p: any) => !newLineupNames.has(p.name));
 
     const changedPlayers = [...playersIn, ...playersOut];
     let lockedPlayerFound = null;
@@ -613,38 +674,40 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
       const newTransfers = [...transfersLog];
 
-      if (playersInNames.length > 0 || playersOutNames.length > 0) {
-          const editLog = {
-              id: `edit_${Date.now()}`,
-              type: isOverride ? 'LATE_REGULAR_EDIT' : 'REGULAR_EDIT',
-              round: currentRound,
-              playersIn: playersInNames,
-              playersOut: playersOutNames,
-              timestamp: new Date().toLocaleString('he-IL', { hour12: false })
-          };
-          newTransfers.push(editLog);
-          await updateDoc(doc(db, 'users', myTeam!.id), { 
-            squad: updatedSquad, 
-            players: updatedSquad, 
-            published_lineup: activeLineup, 
-            published_subs_out: activeBench, 
-            lineup: activeLineup, 
-            lastLineupUpdate: new Date().toISOString(),
-            transfers: arrayUnion(editLog)
-          });
-          setTransfersLog(newTransfers);
-          showToast('✅ ההרכב שודר ונשמר בהצלחה (בוצע רישום ביומן)!', 'success');
+      // 🟢 פיצול השמירה: אם אנחנו בגביע נשמור ל-cup_lineup, אם בליגה נשמור ל-published_lineup 🟢
+      const updateData: any = {};
+      
+      if (isCupModeActive) {
+          updateData.cup_lineup = activeLineup;
+          updateData.cup_bench = activeBench;
+          // לא נשנה את ה-squad/players/lineup הראשיים של הליגה!
       } else {
-          await updateDoc(doc(db, 'users', myTeam!.id), { 
-            squad: updatedSquad, 
-            players: updatedSquad, 
-            published_lineup: activeLineup, 
-            published_subs_out: activeBench, 
-            lineup: activeLineup, 
-            lastLineupUpdate: new Date().toISOString()
-          });
-          showToast('✅ ההרכב שודר ונשמר בהצלחה!', 'success');
+          updateData.squad = updatedSquad;
+          updateData.players = updatedSquad;
+          updateData.published_lineup = activeLineup;
+          updateData.published_subs_out = activeBench;
+          updateData.lineup = activeLineup;
+          updateData.lastLineupUpdate = new Date().toISOString();
+          
+          if (playersInNames.length > 0 || playersOutNames.length > 0) {
+              const editLog = {
+                  id: `edit_${Date.now()}`,
+                  type: isOverride ? 'LATE_REGULAR_EDIT' : 'REGULAR_EDIT',
+                  round: currentRound,
+                  playersIn: playersInNames,
+                  playersOut: playersOutNames,
+                  timestamp: new Date().toLocaleString('he-IL', { hour12: false })
+              };
+              newTransfers.push(editLog);
+              updateData.transfers = arrayUnion(editLog);
+              setTransfersLog(newTransfers);
+          }
       }
+
+      await updateDoc(doc(db, 'users', myTeam!.id), updateData);
+      
+      showToast(`✅ הרכב ${isCupModeActive ? 'הגביע' : 'הליגה'} נשמר בהצלחה!`, 'success');
+      
     } catch (e) { showToast('שגיאה בשמירה', 'error'); }
     setIsSaving(false);
     setAdminOverrideData(null);
@@ -742,9 +805,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           });
       }
 
-      const envApiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || ''; 
-      const localApiKey = localStorage.getItem('gemini_api_key');
-      const activeApiKey = envApiKey || localApiKey;
+      const activeApiKey = process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
 
       if (activeApiKey) {
         try {
@@ -760,7 +821,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           }
 
           const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
+              model: "gemini-1.5-flash-latest",
               contents: aiPrompt
           });
 
@@ -812,10 +873,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       
       const deletedPlayers = (myTeam.squad || []).filter((p: any) => !validIds.has(p.id));
 
-      const updatedLineup = (myTeam.published_lineup || []).filter(x => validIds.has(x.id)).map(x => adminSquad.find(a => a.id === x.id)!);
-      const updatedSubs = (myTeam.published_subs_out || []).filter(x => validIds.has(x.id)).map(x => adminSquad.find(a => a.id === x.id)!);
+      const updatedLineup = (myTeam.published_lineup || []).filter((x:any) => validIds.has(x.id)).map((x:any) => adminSquad.find(a => a.id === x.id)!);
+      const updatedSubs = (myTeam.published_subs_out || []).filter((x:any) => validIds.has(x.id)).map((x:any) => adminSquad.find(a => a.id === x.id)!);
       
-      const existingIds = new Set([...updatedLineup.map(x => x.id), ...updatedSubs.map(x => x.id)]);
+      const existingIds = new Set([...updatedLineup.map((x:any) => x.id), ...updatedSubs.map((x:any) => x.id)]);
       const newlyAddedToAdmin = adminSquad.filter(x => !existingIds.has(x.id));
       newlyAddedToAdmin.forEach(p => p.isStarting = false);
       const finalSubs = [...updatedSubs, ...newlyAddedToAdmin];
@@ -888,8 +949,8 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         </div>
       )}
 
-      {/* 🟢 באנר פלייאוף צעקני 🟢 */}
-      {isPlayoffRound && (
+      {/* 🟢 באנר פלייאוף צעקני - יופיע רק אם במוד ליגה ופלייאוף פעיל 🟢 */}
+      {isPlayoffRound && !isCupModeActive && (
           <div className="bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
               <div className="flex items-center gap-4">
                   <Siren className="w-8 h-8 text-white" />
@@ -897,6 +958,33 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                       <h3 className="text-white font-black text-lg md:text-xl tracking-wide">מחזור פלייאוף פעיל! (מקוצר)</h3>
                       <p className="text-white/80 text-xs md:text-sm font-bold">חוקי הרכב שוחררו: מותר לעלות הרכב חסר (פחות מ-11), ללא חובת מערך מוגדר, ועד 3 שחקנים מאותה קבוצה!</p>
                   </div>
+              </div>
+          </div>
+      )}
+
+      {/* 🟢 באנר חלון גביע (יופיע רק אם פתוח ורק לקבוצות הרלוונטיות) 🟢 */}
+      {cupSettings.isOpen && cupSettings.activeTeams?.includes(myTeam.id) && (
+          <div className="bg-gradient-to-r from-yellow-600 via-amber-500 to-orange-500 p-1 md:p-1.5 rounded-[24px] shadow-2xl flex flex-col md:flex-row items-center justify-between gap-3 relative z-50 mt-2 mb-6">
+              <div className="flex items-center gap-3 px-4 py-2">
+                  <Trophy className="w-8 h-8 text-white drop-shadow-md" />
+                  <div>
+                      <h3 className="text-white font-black text-sm md:text-base leading-tight tracking-wide">הגביע פתוח להרכבים!</h3>
+                      <p className="text-white/90 text-[10px] md:text-xs font-bold">בחר לאיזה מפעל אתה שומר את ההרכב כעת:</p>
+                  </div>
+              </div>
+              <div className="flex bg-black/30 p-1 rounded-2xl w-full md:w-auto">
+                  <button 
+                      onClick={() => setIsCupModeActive(false)} 
+                      className={`flex-1 md:w-32 py-2.5 rounded-xl font-black text-xs md:text-sm transition-all ${!isCupModeActive ? 'bg-white text-black shadow-lg' : 'text-white/70 hover:text-white'}`}
+                  >
+                      ⚽ הרכב ליגה
+                  </button>
+                  <button 
+                      onClick={() => setIsCupModeActive(true)} 
+                      className={`flex-1 md:w-32 py-2.5 rounded-xl font-black text-xs md:text-sm transition-all flex items-center justify-center gap-1.5 ${isCupModeActive ? 'bg-yellow-400 text-black shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'text-white/70 hover:text-white'}`}
+                  >
+                      <Trophy className="w-3.5 h-3.5" /> הרכב גביע
+                  </button>
               </div>
           </div>
       )}
@@ -1036,83 +1124,86 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           
           <div className={`flex-col gap-6 order-2 lg:order-1 ${viewMode === 'list' ? 'hidden lg:flex lg:col-span-4' : 'flex lg:col-span-4'}`}>
             
-            <div className="bg-slate-900/60 backdrop-blur-xl rounded-[32px] border border-orange-500/20 p-5 shadow-[0_0_30px_rgba(249,115,22,0.05)]">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="font-black text-white flex items-center gap-2">
-                  <RefreshCw className="w-5 h-5 text-orange-500" /> חילופי מחצית
-                </h3>
-                <span className="text-[10px] font-black bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg border border-orange-500/30">
-                  {transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED').length} / 3
-                </span>
-              </div>
-              
-              <div className="space-y-3 mb-6">
-                <div className="relative">
-                  <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
-                    <option value="">בחר שחקן יוצא (מההרכב)</option>
-                    {lineup.sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
-                  </select>
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-lg">⬇️</span>
-                </div>
-                
-                <div className="relative">
-                  <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
-                    <option value="">בחר שחקן נכנס (מהספסל)</option>
-                    {bench.map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
-                  </select>
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-lg">⬆️</span>
-                </div>
-                
-                <div className="flex gap-2 pt-2">
-                  <button onClick={handleHalftimeSub} disabled={!isMyTeam || !subOutId || !subInId} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
-                    בצע חילוף ⚡
-                  </button>
-                </div>
-              </div>
-
-              {(() => {
-                  const activeSubs = transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
-                  if (activeSubs.length === 0) return null;
+            {/* פאנל חילופי מחצית - לא מופיע בגביע */}
+            {!isCupModeActive && (
+                <div className="bg-slate-900/60 backdrop-blur-xl rounded-[32px] border border-orange-500/20 p-5 shadow-[0_0_30px_rgba(249,115,22,0.05)]">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-black text-white flex items-center gap-2">
+                      <RefreshCw className="w-5 h-5 text-orange-500" /> חילופי מחצית
+                    </h3>
+                    <span className="text-[10px] font-black bg-orange-500/10 text-orange-400 px-3 py-1.5 rounded-lg border border-orange-500/30">
+                      {transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED').length} / 3
+                    </span>
+                  </div>
                   
-                  return (
-                      <div className="pt-4 border-t border-slate-800">
-                          <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-widest">חילופים פעילים</h4>
-                          <div className="space-y-2">
-                              {activeSubs.map(sub => (
-                                  <div key={sub.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                                      <div className="flex items-center gap-2 text-xs font-black">
-                                          <span className="text-red-400 line-through decoration-red-900/50">{sub.playerOut}</span>
-                                          <span className="text-slate-600">➔</span>
-                                          <span className="text-green-400">{sub.playerIn}</span>
-                                      </div>
-                                      {isMyTeam && (
-                                          <div className="flex gap-2">
-                                              <button 
-                                                  onClick={() => {
-                                                      const text = `*חילוף מחצית בזמן אמת!* 🔄\n*קבוצה:* ${myTeam.teamName}\n*מחזור:* ${currentRound}\n\n⬇️ יצא: ${sub.playerOut}\n⬆️ נכנס: ${sub.playerIn}`;
-                                                      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-                                                  }}
-                                                  className="p-1.5 bg-[#25D366]/10 text-[#25D366] rounded-lg hover:bg-[#25D366] hover:text-white transition-colors border border-[#25D366]/20 flex items-center justify-center"
-                                                  title="שתף חילוף לווצאפ"
-                                              >
-                                                  <Share2 className="w-3.5 h-3.5" />
-                                              </button>
-                                              <button 
-                                                  onClick={() => handleCancelSub(sub.id)}
-                                                  className="p-1.5 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition-colors border border-red-500/20"
-                                                  title="בטל חילוף"
-                                              >
-                                                  <Undo2 className="w-3.5 h-3.5" />
-                                              </button>
-                                          </div>
-                                      )}
-                                  </div>
-                              ))}
-                          </div>
-                      </div>
-                  );
-              })()}
-            </div>
+                  <div className="space-y-3 mb-6">
+                    <div className="relative">
+                      <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
+                        <option value="">בחר שחקן יוצא (מההרכב)</option>
+                        {lineup.sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
+                      </select>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-lg">⬇️</span>
+                    </div>
+                    
+                    <div className="relative">
+                      <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
+                        <option value="">בחר שחקן נכנס (מהספסל)</option>
+                        {bench.map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
+                      </select>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-lg">⬆️</span>
+                    </div>
+                    
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={handleHalftimeSub} disabled={!isMyTeam || !subOutId || !subInId} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
+                        בצע חילוף ⚡
+                      </button>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const activeSubs = transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+                    if (activeSubs.length === 0) return null;
+                    
+                    return (
+                        <div className="pt-4 border-t border-slate-800">
+                            <h4 className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-widest">חילופים פעילים</h4>
+                            <div className="space-y-2">
+                                {activeSubs.map(sub => (
+                                    <div key={sub.id} className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                                        <div className="flex items-center gap-2 text-xs font-black">
+                                            <span className="text-red-400 line-through decoration-red-900/50">{sub.playerOut}</span>
+                                            <span className="text-slate-600">➔</span>
+                                            <span className="text-green-400">{sub.playerIn}</span>
+                                        </div>
+                                        {isMyTeam && (
+                                            <div className="flex gap-2">
+                                                <button 
+                                                    onClick={() => {
+                                                        const text = `*חילוף מחצית בזמן אמת!* 🔄\n*קבוצה:* ${myTeam.teamName}\n*מחזור:* ${currentRound}\n\n⬇️ יצא: ${sub.playerOut}\n⬆️ נכנס: ${sub.playerIn}`;
+                                                        window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+                                                    }}
+                                                    className="p-1.5 bg-[#25D366]/10 text-[#25D366] rounded-lg hover:bg-[#25D366] hover:text-white transition-colors border border-[#25D366]/20 flex items-center justify-center"
+                                                    title="שתף חילוף לווצאפ"
+                                                >
+                                                    <Share2 className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleCancelSub(sub.id)}
+                                                    className="p-1.5 bg-red-500/10 text-red-500 rounded-lg hover:bg-red-500 hover:text-white transition-colors border border-red-500/20"
+                                                    title="בטל חילוף"
+                                                >
+                                                    <Undo2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                  })()}
+                </div>
+            )}
 
             {viewMode === 'pitch' && (
               <div className="hidden lg:flex flex-col bg-slate-900/60 backdrop-blur-xl rounded-[32px] border border-white/5 p-5 shadow-2xl flex-1 min-h-[300px]">
@@ -1201,7 +1292,8 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
               </div>
 
             ) : (
-              <div className="relative w-full h-[600px] sm:h-[650px] md:h-[800px] rounded-[40px] overflow-hidden shadow-2xl border-[8px] border-[#0B1120] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-800 via-green-900 to-green-950 animate-in fade-in flex flex-col shrink-0">
+              // 🟢 שינוי צבע הדשא אם זה גביע 🟢
+              <div className={`relative w-full h-[600px] sm:h-[650px] md:h-[800px] rounded-[40px] overflow-hidden shadow-2xl border-[8px] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] animate-in fade-in flex flex-col shrink-0 ${isCupModeActive ? 'border-amber-900 from-yellow-800 via-amber-900 to-[#1e1005]' : 'border-[#0B1120] from-emerald-800 via-green-900 to-green-950'}`}>
                 <div className="absolute inset-0 pointer-events-none opacity-20 mix-blend-overlay" style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 40px, #ffffff 40px, #ffffff 80px)' }}></div>
                 
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1/3 h-[15%] border-[2px] border-white/30 rounded-b-3xl pointer-events-none"></div>
@@ -1214,11 +1306,11 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                 <div className="absolute top-1/2 w-full border-t-[2px] border-white/30 pointer-events-none"></div>
 
                 <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-50 pointer-events-none">
-                  <div className="bg-black/40 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-2 shadow-lg">
+                  <div className={`bg-black/40 backdrop-blur-xl px-4 py-2 rounded-2xl border flex items-center gap-2 shadow-lg ${isCupModeActive ? 'border-yellow-500/30' : 'border-white/10'}`}>
                     <span className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">מערך</span>
                     <span className={`text-sm font-black ${isFormationValid ? 'text-white' : 'text-red-400'}`}>{currentFormationStr}</span>
                   </div>
-                  <div className={`bg-black/40 backdrop-blur-xl px-4 py-2 rounded-2xl border border-white/10 shadow-lg text-sm font-black tracking-wider ${activeLineup.length === 11 ? (isFormationValid ? 'text-green-400' : 'text-red-400') : isFormationValid ? 'text-orange-400' : 'text-red-400'}`}>
+                  <div className={`bg-black/40 backdrop-blur-xl px-4 py-2 rounded-2xl border shadow-lg text-sm font-black tracking-wider ${isCupModeActive ? 'border-yellow-500/30' : 'border-white/10'} ${activeLineup.length === 11 ? (isFormationValid ? 'text-green-400' : 'text-red-400') : isFormationValid ? 'text-orange-400' : 'text-red-400'}`}>
                     {activeLineup.length}/11
                   </div>
                 </div>
@@ -1228,8 +1320,9 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     const posPlayers = lineup.filter(p => p.position === pos);
                     const maxPos = pos === 'GK' ? 1 : pos === 'DEF' ? 5 : pos === 'MID' ? 5 : 3;
                     
-                    // 🟢 בפלייאוף אין מקסימום שחקנים לעמדה (חוץ משוער), נרשה כמה שרוצים עד שמגיעים ל-11 🟢
-                    const effectiveMax = isPlayoffRound && pos !== 'GK' ? 10 : maxPos;
+                    // 🟢 בפלייאוף וגביע מתקדמים מאפשרים חופש במערכים 🟢
+                    const allowFreeForm = isCupModeActive ? (cupSettings.stage === 'semi' || cupSettings.stage === 'final') : isPlayoffRound;
+                    const effectiveMax = allowFreeForm && pos !== 'GK' ? 10 : maxPos;
                     const showGhost = isMyTeam && posPlayers.length < effectiveMax && activeLineup.length < 11;
                     
                     const rowZIndex = pos === 'GK' ? 'z-10' : pos === 'DEF' ? 'z-20' : pos === 'MID' ? 'z-30' : 'z-40';
@@ -1411,8 +1504,8 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         <div className="bg-black/80 backdrop-blur-2xl p-2.5 rounded-[32px] border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-3 w-full max-w-[380px] pointer-events-auto transition-all animate-in slide-in-from-bottom-10">
            <button 
              onClick={handleSaveLineup} 
-             disabled={isSaving || !isFormationValid} 
-             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${isFormationValid ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95' : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
+             disabled={isSaving || !isFormationValid || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11)} 
+             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${isFormationValid && (isPlayoffRound || isCupModeActive || activeLineup.length === 11) ? (isCupModeActive ? 'bg-gradient-to-r from-yellow-400 to-amber-600 text-black hover:brightness-110 active:scale-95 shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95') : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
            >
              {isSaving ? (
                <span className="animate-pulse">שומר...</span>
@@ -1421,10 +1514,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                  <span className="text-sm text-red-400 leading-tight">מערך לא חוקי</span>
                  <span className="text-[10px] text-slate-500">({currentFormationStr} אינו מאושר)</span>
                </>
-             ) : !isFormationValid ? (
+             ) : !isFormationValid || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11) ? (
                <span className="text-sm">השלם הרכב (11 שחקנים)</span>
              ) : (
-               <>שמור הרכב ועדכן זירה 💾</>
+               <>{isCupModeActive ? 'שמור הרכב גביע 🏆' : 'שמור הרכב ועדכן זירה 💾'}</>
              )}
            </button>
            <button 

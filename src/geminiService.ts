@@ -5,7 +5,7 @@ const GEMINI_API_KEY = "AIzaSyDsXUeI2CUSm4bz5A2K32BFOOa5xkRPtvk";
 
 const getApiKey = (providedKey?: string) => {
   return providedKey || 
-         (globalThis as any).process?.env?.GEMINI_API_KEY || 
+         process.env.GEMINI_API_KEY || 
          localStorage.getItem('gemini_api_key') || 
          GEMINI_API_KEY;
 };
@@ -32,7 +32,7 @@ export const analyzeMatchImage = async (base64Data: string, mimeType: string, hi
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash", 
+      model: "gemini-3-flash-preview", 
       contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Data } }] }]
     });
 
@@ -81,7 +81,7 @@ ${fixturesText}
 
 הסיכום צריך לכלול כותרת מפוצצת, התייחסות למובילת הטבלה, וסלנג כדורגל ישראלי. החזר בפורמט Markdown.`;
 
-    const response = await ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
+    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
     return response.text || "";
 };
 
@@ -108,6 +108,6 @@ ${teamsWithPlayersText}
 
 החזר את השמועות בפורמט Markdown בצורה של מבזקי חדשות.`;
 
-    const response = await ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
+    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
     return response.text || "";
 };

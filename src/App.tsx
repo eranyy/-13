@@ -10,6 +10,7 @@ import LiveArena from './components/LiveArena';
 import LineupManager from './components/LineupManager';
 import LoginScreen from './components/LoginScreen';
 import SocialFeed from './components/SocialFeed'; 
+import CupTab from './components/CupTab';
 import { Home, Users, Zap, Trophy, Calendar, Settings, BarChart3, RefreshCcw } from 'lucide-react'; 
 import { collection, onSnapshot, doc, setDoc, getDocs, addDoc, serverTimestamp } from 'firebase/firestore'; 
 
@@ -18,33 +19,27 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'home' | 'live' | 'lineup' | 'table' | 'fixtures' | 'settings' | 'cup'>('home');
   const [teams, setTeams] = useState<Team[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [currentRound, setCurrentRound] = useState(24);
+  
+  // 🟢 התיקון: ערך התחלתי שונה ל-27 🟢
+  const [currentRound, setCurrentRound] = useState(27);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // 🟢 פצצת רענון: פונקציה שמנקה זיכרון מטמון דפדפני בכוח 🟢
   const forceHardRefresh = () => {
     setIsRefreshing(true);
-    // מנקה את כל הזיכרון המקומי שהדפדפן אולי שומר
     localStorage.clear();
     sessionStorage.clear();
-    // טוען את העמוד מחדש מהשרת (עוקף את הקאש של הדפדפן)
     window.location.href = window.location.pathname + '?refresh=' + new Date().getTime();
   };
 
-  // בדיקת אדמין קשיחה
   const isEran = loggedInUser?.email?.toLowerCase() === 'eranyy@gmail.com' || loggedInUser?.role === UserRole.ADMIN || loggedInUser?.role === UserRole.SUPER_ADMIN;
-  // דורס את השם ל"ערן" תמיד אם זה האדמין, כדי להשמיד את "ההנהלה"
   const displayName = isEran ? 'ערן' : (loggedInUser?.name || '');
 
-  // 🟢 --- מנגנון רדאר ונוכחות חכם ברמת האפליקציה --- 🟢
   useEffect(() => {
     if (!loggedInUser) return;
 
     const recordPresence = async () => {
       try {
         const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        
-        // מעדכן את הנוכחות בזירה עם השם הדרוס (ערן). השתמשנו באותו מזהה ספציפי עבור אדמין כדי למנוע 2 דוקומנטים
         const presenceDocId = isEran ? 'admin_eran' : loggedInUser.id;
 
         await setDoc(doc(db, 'presence', presenceDocId), {
@@ -76,19 +71,15 @@ const App: React.FC = () => {
   }, [loggedInUser, displayName, isEran]);
 
   useEffect(() => {
-    // 🟢 מנגנון אכיפת רענון שקט בעליית האפליקציה 🟢
-    // בודק אם זו פעם ראשונה שהמשתמש נכנס היום, אם כן - מנקה קאש ישן
     const today = new Date().toDateString();
     const lastClearDate = localStorage.getItem('last_cache_clear_date');
     if (lastClearDate !== today) {
-        // מנקה מפתחות ספציפיים שעלולים לתקוע את התצוגה, אבל לא מנתק את המשתמש
         localStorage.removeItem('luzon_last_team_id');
         localStorage.setItem('last_cache_clear_date', today);
     }
 
     const fallbackTimer = setTimeout(() => setIsInitializing(false), 2000);
     try {
-      // 🟢 סנכרון משתמשים - מאולץ למשוך נתונים טריים 🟢
       const unsubTeams = onSnapshot(collection(db, "users"), (snapshot) => { 
         const loadedTeams = snapshot.docs.map(d => d.data() as Team);
         setTeams(loadedTeams); 
@@ -109,8 +100,9 @@ const App: React.FC = () => {
       });
 
       const unsubSettings = onSnapshot(doc(db, "leagueData", "settings"), (docSnap) => {
+        // 🟢 התיקון: אם חסר בפיירבייס, שים 27 ולא 24 🟢
         if(docSnap.exists() && docSnap.data().currentRound) setCurrentRound(docSnap.data().currentRound);
-        else setDoc(doc(db, "leagueData", "settings"), { currentRound: 24 });
+        else setDoc(doc(db, "leagueData", "settings"), { currentRound: 27 });
       });
 
       const init = async () => {
@@ -138,7 +130,6 @@ const App: React.FC = () => {
     }
   };
 
-  // 🟢 התיקון עבור גיא: הוספת ARENA_MANAGER להרשאות של "מנהל עליון" במערכת 🟢
   const isModerator = isEran || loggedInUser?.role === UserRole.MODERATOR || loggedInUser?.role === 'ARENA_MANAGER';
 
   const availableTabs = useMemo(() => {
@@ -176,7 +167,6 @@ const App: React.FC = () => {
             <div className="text-[11px] font-bold text-slate-400">{displayName}</div>
           </div>
           
-          {/* 🟢 כפתור רענון חכם שיופיע ליד כפתור ההתנתקות 🟢 */}
           <button 
              onClick={forceHardRefresh} 
              disabled={isRefreshing}
@@ -199,73 +189,7 @@ const App: React.FC = () => {
         {activeTab === 'fixtures' && <FixturesTab currentRound={currentRound} isAdmin={isEran} />}
         {activeTab === 'table' && <div className="max-w-4xl mx-auto"><AdminLeagueManager isAdmin={isEran} inline={true} initialSubTab="table" /></div>}
         {activeTab === 'settings' && <AdminSettings onClose={() => setActiveTab('home')} isAdmin={isEran} />}
-
-        {activeTab === 'cup' && (
-          <div className="flex flex-col items-center justify-center pt-8 md:pt-12 animate-in fade-in zoom-in-95 duration-500">
-            <div className="w-20 h-20 bg-yellow-500/10 rounded-full flex items-center justify-center mb-4 border border-yellow-500/30 shadow-[0_0_30px_rgba(234,179,8,0.2)]">
-              <Trophy className="w-10 h-10 text-yellow-500 animate-bounce" />
-            </div>
-            <h2 className="text-3xl md:text-4xl font-black text-white mb-2 italic tracking-tighter">גביע לוזון 13</h2>
-            <div className="h-1 w-16 bg-yellow-500 rounded-full mb-8"></div>
-            
-            <div className="bg-slate-800/50 p-6 md:p-8 rounded-[32px] border border-yellow-500/20 backdrop-blur-md shadow-2xl text-center max-w-md w-full relative overflow-hidden">
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-32 bg-yellow-500/5 blur-[50px] pointer-events-none"></div>
-
-              <div className="mb-6 border-b border-white/5 pb-5 relative z-10">
-                <h3 className="text-2xl font-black text-yellow-400 mb-1">הגביע</h3>
-                <p className="text-sm text-slate-300 font-bold">שלישיית גשר הירקון</p>
-                <p className="text-[10px] text-slate-500 mt-1.5 font-bold uppercase tracking-wider">מילים: יורם טהרלב | לחן: נחצ'ה היימן</p>
-              </div>
-              
-              <div className="text-slate-300 font-medium leading-relaxed space-y-4 text-sm md:text-base whitespace-pre-line relative z-10">
-                {`הגביע, הגביע,
-מי ישק לשפתותי?
-מי תפוח לי יביאה
-מי יפרע את צמותי?
-התאמר לי, הגביע
-מי יבואה - ומתי.
-
-הגביע, משפתיך לא ימושו שפתותי,
-עד תאמר לי, הגביע, מי יבואה ומתי.
-
-מן הדרך ביום קיץ
-בא מלח זקן ושר,
-בקבוקו הריק מיין
-לי הציע הוא כשי,
-בקבוקו הריק מיין
-עוד מוטל לו שם בגיא...
-
-הגביע, משפתיך...
-
-מארצות ניכר עם ערב
-בא אביר על סוס לבן.
-מטה רצתי אל הדרך
-ובידי פירחי הגן,
-מן הזר לקח לו פרח
-ומטבע לי נתן.
-
-הגביע, משפתיך...
-
-חלוני ניפתח ברוח,
-ותינוק צחק אלי,
-בידו אחז תפוח
-וקרא לי אל הגיא,
-על כפיים הרמתיהו
-הוא נשק לשפתותי...
-
-הגביע, משפתיך...`}
-              </div>
-              
-              <div className="mt-8 pt-5 border-t border-white/5 relative z-10">
-                <p className="text-xs text-yellow-500/70 font-black tracking-widest uppercase flex items-center justify-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span>
-                  בקרוב
-                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse"></span>
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        {activeTab === 'cup' && <CupTab />}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 w-full bg-[#0B1120]/90 backdrop-blur-2xl border-t border-white/5 px-2 pb-[env(safe-area-inset-bottom)] z-[100]">

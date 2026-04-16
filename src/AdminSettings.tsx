@@ -3,7 +3,7 @@ import { db, auth } from './firebaseConfig';
 import { analyzeMatchImage, generateAISummary, generateRumors } from './geminiService'; 
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame } from 'lucide-react';
+import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy } from 'lucide-react';
 import { parseFantasyExcel } from './utils/FantasyExcelParser'; 
 
 interface AdminSettingsProps { onClose?: () => void; isAdmin?: boolean; inline?: boolean; initialSubTab?: string; }
@@ -100,6 +100,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [isResettingLive, setIsResettingLive] = useState(false);
   const [isGeneratingPost, setIsGeneratingPost] = useState(false);
   const [isSavingPlayoffs, setIsSavingPlayoffs] = useState(false); 
+  const [isSavingCup, setIsSavingCup] = useState(false); 
   
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -109,10 +110,12 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [showEndSeason, setShowEndSeason] = useState(false);
   const [showUndoConfirm, setShowUndoConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showCupAdminModal, setShowCupAdminModal] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [endSeasonPwd, setEndSeasonPwd] = useState('');
   const [seasonArchiveName, setSeasonArchiveName] = useState('LUZON 13 - 2024');
+  const [cupWinner, setCupWinner] = useState(''); 
   
   const [tableDriveUrl, setTableDriveUrl] = useState('');
   const [isSyncingTable, setIsSyncingTable] = useState(false);
@@ -120,6 +123,8 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [transfersDriveUrl, setTransfersDriveUrl] = useState('');
   
   const [playoffRoundsInput, setPlayoffRoundsInput] = useState<string>(''); 
+  const [cupSettings, setCupSettings] = useState<any>({ isOpen: false, stage: 'groups', activeTeams: [], groupStandings: {} });
+  const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
   const sheetsApiKey = 'AIzaSyARwamUBjcirbqFtWn_RpKkOdiHmeGlis0';
@@ -143,8 +148,16 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             }
         }
     });
+
+    const unsubCup = onSnapshot(doc(db, "leagueData", "cup_settings"), (docSnap) => {
+        if(docSnap.exists()) {
+            const data = docSnap.data();
+            setCupSettings(data);
+            setTempCupOverrides(data.groupStandings || {});
+        }
+    });
     
-    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); };
+    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); unsubCup(); };
   }, []);
 
   useEffect(() => {
@@ -173,6 +186,58 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   }, [loginLogs]);
 
   const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => { setToast({msg, type}); if (type !== 'info') setTimeout(() => setToast(null), 5000); };
+
+  // --- פונקציות ניהול גביע 🏆 ---
+  const handleUpdateCupSettings = async (updates: any) => {
+      setIsSavingCup(true);
+      try {
+          await setDoc(doc(db, 'leagueData', 'cup_settings'), updates, { merge: true });
+          showMessage('✅ הגדרות הגביע עודכנו!', 'success');
+      } catch (e) {
+          showMessage('❌ שגיאה בעדכון הגביע', 'error');
+      }
+      setIsSavingCup(false);
+  };
+
+  const handleDrawCupGroups = async () => {
+      if (!window.confirm('זהירות: הגרלת בתים תדרוס בתים קיימים ותשבץ מחדש לפי הטבלה הנוכחית של הליגה! להמשיך?')) return;
+      setIsSavingCup(true);
+      try {
+          const activeTeams = users.filter(u => u.id !== 'admin' && u.id !== 'system' && u.teamName);
+          const sortedTable = [...activeTeams].sort((a, b) => {
+              const aPts = a.points || 0; const bPts = b.points || 0;
+              if (bPts !== aPts) return bPts - aPts;
+              return ((b.gf || 0) - (b.ga || 0)) - ((a.gf || 0) - (a.ga || 0));
+          });
+          
+          const lannister = [sortedTable[0]?.id, sortedTable[2]?.id, sortedTable[4]?.id].filter(Boolean);
+          const stark = [sortedTable[1]?.id, sortedTable[3]?.id, sortedTable[5]?.id].filter(Boolean);
+
+          await setDoc(doc(db, 'leagueData', 'cup_settings'), {
+              groups: { lannister, stark },
+              activeTeams: [...lannister, ...stark],
+              groupStandings: { 
+                  [sortedTable[0]?.id]: 0, [sortedTable[2]?.id]: 0, [sortedTable[4]?.id]: 0,
+                  [sortedTable[1]?.id]: 0, [sortedTable[3]?.id]: 0, [sortedTable[5]?.id]: 0
+              }
+          }, { merge: true });
+          showMessage('✅ הבתים הוגרלו ונשמרו בהצלחה לפי מיקומי הליגה!', 'success');
+      } catch(e) {
+          showMessage('❌ שגיאה בהגרלת בתים', 'error');
+      }
+      setIsSavingCup(false);
+  };
+
+  const handleSaveCupOverrides = async () => {
+      setIsSavingCup(true);
+      try {
+          await setDoc(doc(db, 'leagueData', 'cup_settings'), { groupStandings: tempCupOverrides }, { merge: true });
+          showMessage('✅ תוצאות הגביע המצטברות עודכנו ידנית', 'success');
+          setShowCupAdminModal(false);
+      } catch(e) { showMessage('❌ שגיאה בעדכון', 'error'); }
+      setIsSavingCup(false);
+  };
+  // --------------------------------
 
   const handleSavePlayoffRounds = async () => {
     setIsSavingPlayoffs(true);
@@ -327,10 +392,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
     if (!geminiApiKey) return showMessage('❌ חסר מפתח Gemini API!', 'error');
     setIsGeneratingPost(true);
     showMessage('הפרשן שלנו כותב את הטור... ✍️', 'info');
+    
     try {
-        const realFixturesSnap = await getDoc(doc(db, 'leagueData', 'real_fixtures'));
-        const matches = realFixturesSnap.exists() ? realFixturesSnap.data().matches : [];
-        const summary = await generateAISummary(matches, users, geminiApiKey);
+        let matchesToAnalyze = [];
+        if (fixtures && fixtures.length > 0) {
+            const activeRound = [...fixtures].reverse().find(r => r.matches && r.matches.length > 0);
+            if (activeRound) {
+                matchesToAnalyze = activeRound.matches;
+            }
+        }
+
+        const summary = await generateAISummary(matchesToAnalyze, users, geminiApiKey);
         
         await addDoc(collection(db, 'social_posts'), {
             authorName: 'האנליסט AI 🤖',
@@ -347,7 +419,8 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         showMessage('✅ סיכום המחזור פורסם בהצלחה!', 'success');
     } catch (e: any) {
         console.error(e);
-        showMessage('❌ שגיאה ביצירת סיכום: ' + e.message, 'error');
+        const errorMsg = e.message.includes('offline') ? 'שגיאת רשת. בדוק חיבור לאינטרנט ונסה שוב.' : e.message;
+        showMessage('❌ שגיאה ביצירת סיכום: ' + errorMsg, 'error');
     } finally {
         setIsGeneratingPost(false);
     }
@@ -927,7 +1000,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             name: seasonArchiveName,
             champ: winner?.teamName || 'N/A',
             runnerUp: runnerUp?.teamName || 'N/A',
-            cup: 'N/A',
+            cup: cupWinner || 'N/A', // 🟢 שדה זוכת הגביע שהוספנו 🟢
             relegated: sortedTable[sortedTable.length - 1]?.teamName || 'N/A',
             date: new Date().toISOString()
         };
@@ -954,6 +1027,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         showMessage('✅ העונה הסתיימה! הנתונים אופסו והארכיון עודכן.', 'success');
         setShowEndSeason(false);
         setEndSeasonPwd('');
+        setCupWinner('');
     } catch (e: any) {
         console.error(e);
         showMessage('❌ שגיאה בסיום עונה.', 'error');
@@ -1073,7 +1147,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         {activeTab === 'users' && (
           <div className="space-y-6">
 
-            {/* 🧮 אזור חישוב מומנטום, טבלה ופיצ'רים אוטומטי מהאפליקציה 🧮 */}
             <div className="bg-gradient-to-r from-purple-900/40 to-pink-900/40 p-6 md:p-8 rounded-[32px] border border-purple-400/50 shadow-[0_0_30px_rgba(168,85,247,0.15)] animate-in fade-in zoom-in-95 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-40 h-40 bg-purple-500/10 blur-[60px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Calculator className="text-purple-400 w-7 h-7" /> חישוב טבלה ומומנטום (אוטומטי)</h3>
@@ -1206,7 +1279,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 </div>
             </div>
 
-            {/* 📸 סריקת משחקים ב-AI (מעודכן עם יכולת Paste ו PDF) 📸 */}
+            {/* 📸 סריקת משחקים ב-AI */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-fuchsia-500/30 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-fuchsia-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Camera className="text-fuchsia-500" /> סריקת לוח משחקים (AI)</h3>
@@ -1222,7 +1295,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
                 <input 
                   type="file" 
-                  accept="image/*,application/pdf" // 🟢 הוספנו תמיכה ב-PDF!
+                  accept="image/*,application/pdf" 
                   className="hidden" 
                   id="fixture-image-upload" 
                   onChange={(e) => {
@@ -1258,7 +1331,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </div>
             </div>
 
-            {/* 🟢 אזור חדש: הגדרת מחזורי פלייאוף 🟢 */}
+            {/* 🟢 אזור הגדרת מחזורי פלייאוף באדמין */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-blue-500/30 shadow-xl relative overflow-hidden mt-6">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 blur-[50px] pointer-events-none rounded-full"></div>
                 <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
@@ -1276,12 +1349,92 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                         className="flex-1 bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 font-mono text-sm"
                         dir="ltr"
                     />
-                    <button
-                        onClick={handleSavePlayoffRounds}
-                        disabled={isSavingPlayoffs}
-                        className={`md:w-48 font-black py-4 rounded-xl transition-all ${playoffRoundsInput.trim() ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg' : 'bg-slate-800 text-slate-500'}`}
-                    >
-                        {isSavingPlayoffs ? 'שומר...' : 'שמור מחזורים 💾'}
+                    <div className="flex gap-2 w-full md:w-auto">
+                        <button
+                            onClick={handleSavePlayoffRounds}
+                            disabled={isSavingPlayoffs}
+                            className={`flex-[2] font-black py-4 px-6 rounded-xl transition-all ${playoffRoundsInput.trim() ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg' : 'bg-slate-800 text-slate-500'}`}
+                        >
+                            {isSavingPlayoffs ? 'שומר...' : 'שמור 💾'}
+                        </button>
+                        <button
+                            onClick={async () => {
+                                if (window.confirm('האם אתה בטוח שברצונך לבטל את כל מחזורי הפלייאוף ולחזור לחוקים רגילים?')) {
+                                    setIsSavingPlayoffs(true);
+                                    try {
+                                        await setDoc(doc(db, 'leagueData', 'settings'), { playoffRounds: [] }, { merge: true });
+                                        setPlayoffRoundsInput('');
+                                        showMessage('✅ מחזורי הפלייאוף נוקו. הליגה חזרה למצב רגיל.', 'success');
+                                    } catch(e) { showMessage('שגיאה בניקוי', 'error'); }
+                                    setIsSavingPlayoffs(false);
+                                }
+                            }}
+                            disabled={isSavingPlayoffs}
+                            className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-4 px-4 rounded-xl transition-all flex items-center justify-center border border-slate-700"
+                            title="נקה מחזורים (חזור לחוקים רגילים)"
+                        >
+                            <Eraser className="w-5 h-5" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* 🏆 ניהול גביע המדינה 🏆 */}
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-yellow-500/30 shadow-xl relative overflow-hidden mt-6">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/10 blur-[50px] pointer-events-none rounded-full"></div>
+                <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
+                    <Trophy className="text-yellow-500" /> מנהלת הגביע
+                </h3>
+                <p className="text-slate-400 text-sm font-bold mb-6 relative z-10">
+                    שליטה מלאה על טורניר הגביע. פתיחת החלון תאפשר למנג'רים להכין הרכבים בלשונית ההרכב תחת חוקי גביע.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 relative z-10 mb-4">
+                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
+                        <span className="font-bold text-white">חלון הרכבי גביע:</span>
+                        <button onClick={() => handleUpdateCupSettings({isOpen: !cupSettings.isOpen})} className={`px-4 py-2 rounded-lg font-black transition-all ${cupSettings.isOpen ? 'bg-green-500 text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-slate-800 border border-slate-600 text-slate-400'}`}>
+                            {cupSettings.isOpen ? 'פתוח למנג׳רים' : 'סגור'}
+                        </button>
+                    </div>
+
+                    <div className="bg-slate-950 p-4 rounded-xl border border-slate-700 flex items-center justify-between">
+                        <span className="font-bold text-white">שלב בטורניר:</span>
+                        <select value={cupSettings.stage || 'groups'} onChange={(e) => handleUpdateCupSettings({stage: e.target.value})} className="bg-slate-800 border border-slate-600 text-white font-bold p-2 rounded-lg outline-none focus:border-yellow-500 transition-colors">
+                            <option value="groups">שלב הבתים</option>
+                            <option value="semi">חצי גמר</option>
+                            <option value="final">גמר</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-700 relative z-10 mb-4">
+                    <span className="font-bold text-white block mb-3">קבוצות פעילות בגביע (רק להן יופיע החלון):</span>
+                    <div className="flex flex-wrap gap-3">
+                        {users.filter(u => u.id !== 'admin' && u.id !== 'system').map(u => {
+                            const isActive = (cupSettings.activeTeams || []).includes(u.id);
+                            return (
+                                <button 
+                                    key={u.id}
+                                    onClick={() => {
+                                        const currentActive = cupSettings.activeTeams || [];
+                                        const newActive = isActive ? currentActive.filter((id: string) => id !== u.id) : [...currentActive, u.id];
+                                        handleUpdateCupSettings({ activeTeams: newActive });
+                                    }}
+                                    className={`px-4 py-2 rounded-lg text-sm font-black border transition-all ${isActive ? 'bg-yellow-500/20 border-yellow-500 text-yellow-400' : 'bg-slate-900 border-slate-700 text-slate-500 hover:border-slate-500'}`}
+                                >
+                                    {u.teamName}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 mt-4 relative z-10">
+                    <button onClick={handleDrawCupGroups} disabled={isSavingCup} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 active:scale-95">
+                        הגרל בתים (לפי טבלה) 🎲
+                    </button>
+                    <button onClick={() => setShowCupAdminModal(true)} disabled={isSavingCup} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-3 rounded-xl border border-slate-600 transition-all flex items-center justify-center gap-2 active:scale-95">
+                        ניהול תוצאות ידני 🛠️
                     </button>
                 </div>
             </div>
@@ -1444,6 +1597,44 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         </div>
       )}
 
+      {/* מודל עריכה ידנית לגביע (Admin Override) */}
+      {showCupAdminModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
+          <div className="bg-slate-900 border border-yellow-500/50 p-6 sm:p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <button onClick={() => setShowCupAdminModal(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors">✕</button>
+            <h3 className="text-2xl font-black text-white mb-6 text-center">עריכת נקודות גביע 🏆</h3>
+            <p className="text-xs text-slate-400 font-bold text-center mb-6">כאן ניתן לדרוס ידנית את הניקוד המצטבר של הקבוצות בשלב הבתים של הגביע.</p>
+            
+            <div className="space-y-6">
+                <div>
+                    <h4 className="text-yellow-400 font-black mb-3 border-b border-yellow-500/30 pb-2">בית לאניסטר</h4>
+                    <div className="space-y-3">
+                        {(cupSettings.groups?.lannister || []).map((tId: string) => (
+                            <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
+                                <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
+                                <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-yellow-500 outline-none" />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div>
+                    <h4 className="text-blue-400 font-black mb-3 border-b border-blue-500/30 pb-2">בית סטארק</h4>
+                    <div className="space-y-3">
+                        {(cupSettings.groups?.stark || []).map((tId: string) => (
+                            <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
+                                <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
+                                <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-blue-500 outline-none" />
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+            
+            <button onClick={handleSaveCupOverrides} disabled={isSavingCup} className="w-full mt-8 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-4 rounded-2xl shadow-lg transition-all active:scale-95 text-lg">שמור תוצאות מותאמות</button>
+          </div>
+        </div>
+      )}
+
       {/* מודל לאיפוס זירה */}
       {showResetConfirm && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
@@ -1525,6 +1716,13 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               className="w-full bg-black/50 border border-slate-700 p-4 rounded-xl text-white font-bold outline-none focus:border-red-500 mb-4 text-center" 
             />
             <input 
+              type="text" 
+              value={cupWinner} 
+              onChange={e => setCupWinner(e.target.value)} 
+              placeholder="שם זוכת הגביע (למשל: תומאלי)" 
+              className="w-full bg-black/50 border border-slate-700 p-4 rounded-xl text-white font-bold outline-none focus:border-yellow-500 mb-4 text-center" 
+            />
+            <input 
               type="password" 
               value={endSeasonPwd} 
               onChange={e => setEndSeasonPwd(e.target.value)} 
@@ -1534,7 +1732,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             />
             <div className="flex gap-3">
               <button onClick={handleEndSeason} disabled={loading || !endSeasonPwd} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-2xl transition-all">אשר וסגור עונה</button>
-              <button onClick={() => { setShowEndSeason(false); setEndSeasonPwd(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-2xl transition-all">ביטול</button>
+              <button onClick={() => { setShowEndSeason(false); setEndSeasonPwd(''); setCupWinner(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-2xl transition-all">ביטול</button>
             </div>
           </div>
         </div>
