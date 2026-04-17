@@ -3,7 +3,7 @@ import { db, auth } from './firebaseConfig';
 import { analyzeMatchImage, generateAISummary, generateRumors } from './geminiService'; 
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy } from 'lucide-react';
+import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff } from 'lucide-react'; // 🟢 הוספנו Bell, BellOff
 import { parseFantasyExcel } from './utils/FantasyExcelParser'; 
 
 interface AdminSettingsProps { onClose?: () => void; isAdmin?: boolean; inline?: boolean; initialSubTab?: string; }
@@ -1189,6 +1189,16 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                           }`}>
                             {u.role === 'ADMIN' ? 'אדמין (ערן)' : u.role === 'ARENA_MANAGER' ? 'מנהל זירה' : 'מנג\'ר'}
                           </span>
+                          {/* 🟢 חיווי התראות פוש 🟢 */}
+                          {u.fcmToken ? (
+                            <span title="מאושר להתראות פוש" className="bg-green-500/10 text-green-400 p-1.5 rounded-lg border border-green-500/30">
+                              <Bell className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <span title="לא אישר התראות" className="bg-red-500/10 text-red-400/50 p-1.5 rounded-lg border border-red-500/20">
+                              <BellOff className="w-3.5 h-3.5" />
+                            </span>
+                          )}
                         </div>
                         <div className="text-sm text-slate-400 mt-1 flex gap-2 justify-center sm:justify-start">
                           <span>מנג'ר ראשי: <span className="text-white font-bold">{u.name}</span> | נקודות: <span className="text-yellow-400 font-bold">{u.points || 0}</span></span>

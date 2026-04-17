@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Team, User, UserRole } from './types';
 import { MOCK_TEAMS } from './constants';
 import { authService } from './authService';
-import { db } from './firebaseConfig'; 
+import { db, messaging } from './firebaseConfig'; // 🟢 הוספנו את messaging
 import AdminLeagueManager from './AdminLeagueManager';
 import AdminSettings from './AdminSettings';
 import FixturesTab from './components/FixturesTab';
@@ -11,8 +11,9 @@ import LineupManager from './components/LineupManager';
 import LoginScreen from './components/LoginScreen';
 import SocialFeed from './components/SocialFeed'; 
 import CupTab from './components/CupTab';
-import { Home, Users, Zap, Trophy, Calendar, Settings, BarChart3, RefreshCcw } from 'lucide-react'; 
+import { Home, Users, Zap, Trophy, Calendar, Settings, BarChart3, RefreshCcw, Bell } from 'lucide-react'; // 🟢 הוספנו את Bell
 import { collection, onSnapshot, doc, setDoc, getDocs, addDoc, serverTimestamp } from 'firebase/firestore'; 
+import { getToken } from 'firebase/messaging'; // 🟢 הוספנו את getToken
 
 const App: React.FC = () => {
   const [loggedInUser, setLoggedInUser] = useState<User | null>(null);
@@ -24,6 +25,9 @@ const App: React.FC = () => {
   const [currentRound, setCurrentRound] = useState(27);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // 🟢 סטייט חדש ששומר את מצב ההתראות של המשתמש
+  const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'unsupported'>('unsupported');
+
   const forceHardRefresh = () => {
     setIsRefreshing(true);
     localStorage.clear();
@@ -33,6 +37,48 @@ const App: React.FC = () => {
 
   const isEran = loggedInUser?.email?.toLowerCase() === 'eranyy@gmail.com' || loggedInUser?.role === UserRole.ADMIN || loggedInUser?.role === UserRole.SUPER_ADMIN;
   const displayName = isEran ? 'ערן' : (loggedInUser?.name || '');
+
+  // 🟢 הלוגיקה החכמה של התראות הפוש 🟢
+  useEffect(() => {
+    if ('Notification' in window) {
+      setPushStatus(Notification.permission as any);
+
+      // אם המשתמש כבר אישר התראות בעבר, ניקח לו את הטוקן באופן שקט מאחורי הקלעים
+      if (Notification.permission === 'granted' && loggedInUser) {
+        const fetchSilentToken = async () => {
+          try {
+            const token = await getToken(messaging, { vapidKey: "BELPkm_Y6IgLW-atBkxPKAyXnUbMagpKIuNF7oQkPLu8XdtzYXcUWD6yGIgqdLguY-OAOyZbJKV8Usm5Yi89emQ" });
+            if (token) {
+              await setDoc(doc(db, "users", loggedInUser.id), { fcmToken: token }, { merge: true });
+            }
+          } catch (e) {
+            console.error("Silent token fetch failed", e);
+          }
+        };
+        fetchSilentToken();
+      }
+    }
+  }, [loggedInUser]);
+
+  // 🟢 פונקציה שמופעלת כשהמשתמש לוחץ על כפתור הפעמון החדש 🟢
+  const handleRequestPush = async () => {
+    try {
+      const permission = await Notification.requestPermission();
+      setPushStatus(permission as any);
+
+      if (permission === 'granted') {
+        const token = await getToken(messaging, { vapidKey: "BELPkm_Y6IgLW-atBkxPKAyXnUbMagpKIuNF7oQkPLu8XdtzYXcUWD6yGIgqdLguY-OAOyZbJKV8Usm5Yi89emQ" });
+        if (token && loggedInUser) {
+          await setDoc(doc(db, "users", loggedInUser.id), { fcmToken: token }, { merge: true });
+          alert('מעולה! ההתראות הופעלו בהצלחה 🔔');
+        }
+      } else {
+        alert('סירבת לקבלת התראות. אם תתחרט, תוכל לשנות זאת בהגדרות הדפדפן (סמל המנעול).');
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   useEffect(() => {
     if (!loggedInUser) return;
@@ -100,7 +146,6 @@ const App: React.FC = () => {
       });
 
       const unsubSettings = onSnapshot(doc(db, "leagueData", "settings"), (docSnap) => {
-        // 🟢 התיקון: אם חסר בפיירבייס, שים 27 ולא 24 🟢
         if(docSnap.exists() && docSnap.data().currentRound) setCurrentRound(docSnap.data().currentRound);
         else setDoc(doc(db, "leagueData", "settings"), { currentRound: 27 });
       });
@@ -167,6 +212,18 @@ const App: React.FC = () => {
             <div className="text-[11px] font-bold text-slate-400">{displayName}</div>
           </div>
           
+          {/* 🟢 כפתור אישור התראות שמופיע רק למי שעוד לא אישר 🟢 */}
+          {pushStatus !== 'granted' && pushStatus !== 'unsupported' && (
+            <button
+              onClick={handleRequestPush}
+              className="bg-green-500/10 hover:bg-green-500/30 text-green-400 p-2 md:px-4 md:py-2 rounded-xl text-sm font-bold transition-all border border-green-500/30 flex items-center gap-2 shadow-sm animate-pulse"
+              title="הפעל התראות"
+            >
+              <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
+              <span className="hidden md:inline">הפעל התראות</span>
+            </button>
+          )}
+
           <button 
              onClick={forceHardRefresh} 
              disabled={isRefreshing}
