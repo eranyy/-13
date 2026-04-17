@@ -30,7 +30,6 @@ const getTeamColors = (teamName: string, isGK: boolean) => {
   return { prim: '#3b82f6', sec: '#1e3a8a', text: '#ffffff' }; 
 };
 
-// מנוע זיהוי השמות האגרסיבי והחדש
 const isTeamMatch = (t1: string, t2: string) => {
     if (!t1 || !t2) return false;
     const normalize = (s: string) => s.replace(/['"״׳.-]/g, '').replace(/\s+/g, '').toLowerCase();
@@ -134,7 +133,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
   const [activeZone, setActiveZone] = useState<'GK' | 'DEF' | 'MID' | 'FWD' | null>(null);
 
-  // 🟢 State למצב גביע: האם המנג'ר כרגע מעדכן הרכב ליגה או גביע?
   const [isCupModeActive, setIsCupModeActive] = useState<boolean>(false);
 
   const [lineup, setLineup] = useState<Player[]>([]);
@@ -165,7 +163,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [adminOverrideData, setAdminOverrideData] = useState<{playersIn: any[], playersOut: any[]} | null>(null);
 
   const [playoffRounds, setPlayoffRounds] = useState<number[]>([]);
-  // 🟢 נתוני הגביע מהאדמין
   const [cupSettings, setCupSettings] = useState<{isOpen: boolean, stage: string, activeTeams: string[]}>({ isOpen: false, stage: 'groups', activeTeams: [] });
 
   const showToast = (msg: string, type: 'error' | 'success' | 'info') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
@@ -204,7 +201,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         }
     });
 
-    // מאזינים להגדרות הגביע מהאדמין
     const unsubCup = onSnapshot(doc(db, 'leagueData', 'cup_settings'), docSnap => {
         if(docSnap.exists()) {
             setCupSettings({ 
@@ -255,14 +251,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     handleSetTeam(targetTeamId);
   }, [teams, loggedInUser, activeTeamId]);
 
-  // 🟢 Effect שנטען בכל פעם שמחליפים בין "הרכב ליגה" ל"הרכב גביע" 🟢
   useEffect(() => {
     if (activeTeamId) {
       const team = displayTeams.find(t => t.id === activeTeamId);
       if (team) {
         setMyTeam(team);
         
-        // טעינת הסגל המלא (אותו סגל משמש גם לליגה וגם לגביע)
         const sourceSquad = team.squad || team.players || [];
         const safeSquad: Player[] = Array.from(new Map(
           sourceSquad.filter((p: any) => p && p.id).map((p: any) => [p.id, { ...p, position: normalizePos(p.position) }])
@@ -272,22 +266,18 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         let benchPlayers: Player[] = [];
 
         if (isCupModeActive) {
-            // טעינת הרכב מהגביע
             startingPlayers = (team.cup_lineup || []).map((p:any) => ({...p, isStarting: true}));
             benchPlayers = (team.cup_bench || []).map((p:any) => ({...p, isStarting: false}));
             
-            // אם אין עדיין הרכב גביע, ניקח את ההרכב הרגיל כבסיס התחלתי (אבל נשמור אחר כך לגביע)
             if (startingPlayers.length === 0 && benchPlayers.length === 0) {
                 startingPlayers = safeSquad.filter(p => p.isStarting === true);
                 benchPlayers = safeSquad.filter(p => !p.isStarting);
             }
         } else {
-            // טעינת הרכב ליגה רגיל
             startingPlayers = safeSquad.filter(p => p.isStarting === true);
             benchPlayers = safeSquad.filter(p => !p.isStarting);
         }
 
-        // הגנות במקרה של חריגות
         if (startingPlayers.length > 11) {
           const excess = startingPlayers.splice(11);
           benchPlayers.push(...excess.map(p => ({ ...p, isStarting: false })));
@@ -296,14 +286,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         if (startingPlayers.length === 0 && benchPlayers.length === 0 && safeSquad.length > 0) {
           setLineup([]); setBench(safeSquad.sort((a, b) => (POS_ORDER[a.position] || 99) - (POS_ORDER[b.position] || 99)));
         } else {
-          // דואגים ששחקני הספסל יגיעו מסודרים לפי עמדות
           const allAssignedIds = new Set([...startingPlayers.map(p=>p.id), ...benchPlayers.map(p=>p.id)]);
           safeSquad.forEach(p => { if (!allAssignedIds.has(p.id)) benchPlayers.push({...p, isStarting: false}); });
           
           setLineup(startingPlayers); setBench(benchPlayers.sort((a, b) => (POS_ORDER[a.position] || 99) - (POS_ORDER[b.position] || 99)));
         }
         
-        // יומן העברות תמיד רגיל, גביע לא דורס יומן בשלב זה
         setTransfersLog(team.transfers || []);
       }
     }
@@ -322,29 +310,25 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const gks = activeLineup.filter(p => p.position === 'GK').length;
   const currentFormationStr = `${defs}-${mids}-${fwds}`;
   
-  // 🟢 לוגיקת ולידציית מערך - חוקים שונים לפי גביע / פלייאוף / ליגה 🟢
   let isFormationValid = false;
   
   if (isCupModeActive) {
       if (cupSettings.stage === 'groups') {
-          // גביע (בתים/רבע): מותר פחות מ-11, אבל חובה לשמור על תבנית מערך (הבודק אם מה שיש מתאים למערך חוקי כלשהו)
           const allowedParsed = ALLOWED_FORMATIONS.map(f => {
               const parts = f.split('-'); return { d: parseInt(parts[0]), m: parseInt(parts[1]), f: parseInt(parts[2]) };
           });
           const isValidPath = allowedParsed.some(form => defs <= form.d && mids <= form.m && fwds <= form.f);
           isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11 && isValidPath;
       } else {
-          // גביע (חצי גמר / גמר): מותר הכל, ללא חובת מערך, פחות מ-11, למעט שוער 1.
           isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11;
       }
   } else if (isPlayoffRound) {
-      // ליגה בפלייאוף
       isFormationValid = gks <= 1 && activeLineup.length > 0 && activeLineup.length <= 11;
   } else {
-      // ליגה רגילה
       isFormationValid = activeLineup.length === 11 && ALLOWED_FORMATIONS.includes(currentFormationStr) && gks === 1;
   }
 
+  // 🟢 פונקציית בדיקת המשחקים - חסינה לטקסטים והכי חשוב - קוראת מהסוף להתחלה כדי לקחת תמיד את המשחק החדש ביותר 🟢
   const checkIsMatchStarted = (playerRealTeam: string) => {
     if (!playerRealTeam) return false;
     
@@ -354,7 +338,8 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         return teamData.name || teamData.id || '';
     };
 
-    const match = realFixtures.find(m => {
+    // קריאת המערך ב-Reverse מונעת נעילה בגלל משחקים ישנים מההיסטוריה ששמורים בפיירבייס
+    const match = [...realFixtures].reverse().find(m => {
         const hName = m.h || getTeamName(m.homeTeam);
         const aName = m.a || getTeamName(m.awayTeam);
         return isTeamMatch(hName, playerRealTeam) || isTeamMatch(aName, playerRealTeam);
@@ -362,42 +347,68 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
     if (!match) return false;
 
+    // בדיקת גיבוי: האם כבר יש תוצאה במספר?
     const hScoreRaw = match.hs ?? match.homeScore ?? match.homeTeamScore ?? match.scoreHome ?? match.score;
-    if (hScoreRaw !== undefined && hScoreRaw !== null && hScoreRaw !== '') {
-        return true; 
-    }
+    const aScoreRaw = match.as ?? match.awayScore ?? match.awayTeamScore ?? match.scoreAway;
+    
+    const isValidScore = (val: any) => {
+        if (val === undefined || val === null) return false;
+        const s = String(val).trim();
+        if (s === '' || s === '-' || s === 'טרם נקבע' || s === 'TBD' || s === '0') return false;
+        if (!isNaN(Number(s)) && Number(s) > 0) return true;
+        return false;
+    };
 
-    const timeStr = match.time || match.matchTime || match.date;
-    if (!timeStr || typeof timeStr !== 'string') return false;
+    if (isValidScore(hScoreRaw) || isValidScore(aScoreRaw)) return true;
+
+    const dateStr = match.date; 
+    const timeStr = match.time || match.matchTime;
+
+    if (!timeStr || typeof timeStr !== 'string' || !dateStr || typeof dateStr !== 'string') return false;
 
     const timeMatch = timeStr.match(/(\d{1,2}):(\d{2})/);
     if (!timeMatch) return false;
 
+    const dateMatch = dateStr.match(/(\d{1,2})[\/\.-](\d{1,2})/);
+    if (!dateMatch) return false;
+
     const matchHours = parseInt(timeMatch[1], 10);
     const matchMinutes = parseInt(timeMatch[2], 10);
+    const matchDay = parseInt(dateMatch[1], 10);
+    const matchMonth = parseInt(dateMatch[2], 10);
 
     const formatter = new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Jerusalem',
+        year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', hour12: false
     });
 
     const parts = formatter.formatToParts(new Date());
+    const currentYear = parseInt(parts.find(p => p.type === 'year')?.value || '0', 10);
+    const currentMonth = parseInt(parts.find(p => p.type === 'month')?.value || '0', 10);
+    const currentDay = parseInt(parts.find(p => p.type === 'day')?.value || '0', 10);
     let currentHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
     if (currentHour === 24) currentHour = 0;
     const currentMinute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10);
 
-    const currentTimeInMins = currentHour * 60 + currentMinute;
-    const matchTimeInMins = matchHours * 60 + matchMinutes;
-    
-    const diff = currentTimeInMins - matchTimeInMins;
+    let matchYear = currentYear;
+    if (matchMonth === 1 && currentMonth === 12) matchYear = currentYear + 1;
+    else if (matchMonth === 12 && currentMonth === 1) matchYear = currentYear - 1;
 
-    const isStarted = diff >= 6 || diff < -600; 
+    const currentAbsolute = Date.UTC(currentYear, currentMonth - 1, currentDay, currentHour, currentMinute);
+    const matchAbsolute = Date.UTC(matchYear, matchMonth - 1, matchDay, matchHours, matchMinutes);
 
-    return isStarted;
+    const diffMins = (currentAbsolute - matchAbsolute) / 60000;
+
+    if (diffMins >= 5) {
+        return true;
+    }
+
+    return false;
   };
 
   const checkIsHalftimeSub = (playerName: string) => {
-    if (isCupModeActive) return false; // חילופי מחצית פחות רלוונטיים להגדרת הגביע השבועית
+    if (isCupModeActive) return false; 
     return transfersLog.some(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED' && t.playerIn === playerName);
   };
 
@@ -422,7 +433,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleCancelSub = async (subId: string) => {
-    if (!isMyTeam || !myTeam || isCupModeActive) return; // לא רלוונטי בגביע עכשיו
+    if (!isMyTeam || !myTeam || isCupModeActive) return; 
     const subToCancel = transfersLog.find(t => t.id === subId);
     if (!subToCancel) return;
 
@@ -484,7 +495,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
     if (checkIsMatchStarted(player.team)) {
         if (!isManagerOrAdmin) {
-            return showToast(`❌ המשחק של ${player.team} התחיל! אי אפשר לבצע שינויים הקשורים ל-${player.name}.`, 'error');
+            return showToast(`❌ המשחק של ${player.team} כבר התחיל או ישוחק בקרוב מאוד! לא ניתן לעדכן.`, 'error');
         } else {
             showToast(`⚠️ אזהרת מנהל: המשחק של ${player.team} החל. אישור סופי של החילוף יידרש בשמירה.`, 'info');
         }
@@ -495,8 +506,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       
       const sameTeamCountInLineup = currentActiveLineup.filter(p => isTeamMatch(p.team, player.team)).length;
       
-      // 🟢 הגבלת קבוצות לפי גביע או פלייאוף 🟢
-      let maxAllowedFromTeam = 2; // רגיל
+      let maxAllowedFromTeam = 2;
       if (isCupModeActive) {
           if (cupSettings.stage === 'semi' || cupSettings.stage === 'final') maxAllowedFromTeam = 3;
       } else if (isPlayoffRound) {
@@ -514,7 +524,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
       if (newGks > 1) return showToast('❌ חוק לוזון: מקסימום שוער 1 בהרכב הפותח!', 'error');
 
-      // 🟢 בדיקת מערך בזמן אמת (רק אם חייבים מערך) 🟢
       let requireFormationCheck = true;
       if (isCupModeActive && (cupSettings.stage === 'semi' || cupSettings.stage === 'final')) requireFormationCheck = false;
       if (!isCupModeActive && isPlayoffRound) requireFormationCheck = false;
@@ -616,10 +625,8 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const handleSaveLineup = async () => {
     if (!isMyTeam || !myTeam || !isFormationValid) return;
     
-    // ולידציה סופית: אם ליגה רגילה, חובה 11. 
     if (!isCupModeActive && !isPlayoffRound && activeLineup.length !== 11) return;
     
-    // בודקים אילו שחקנים נכנסו/יצאו מול מה שכבר היה שומר במערכת באותו מוד
     const previousLineup = isCupModeActive ? (myTeam.cup_lineup || []) : (myTeam.published_lineup || []);
     
     const oldLineupNames = new Set(previousLineup.map((p: any) => p.name));
@@ -674,13 +681,11 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
       const newTransfers = [...transfersLog];
 
-      // 🟢 פיצול השמירה: אם אנחנו בגביע נשמור ל-cup_lineup, אם בליגה נשמור ל-published_lineup 🟢
       const updateData: any = {};
       
       if (isCupModeActive) {
           updateData.cup_lineup = activeLineup;
           updateData.cup_bench = activeBench;
-          // לא נשנה את ה-squad/players/lineup הראשיים של הליגה!
       } else {
           updateData.squad = updatedSquad;
           updateData.players = updatedSquad;
@@ -1292,7 +1297,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
               </div>
 
             ) : (
-              // 🟢 שינוי צבע הדשא אם זה גביע 🟢
               <div className={`relative w-full h-[600px] sm:h-[650px] md:h-[800px] rounded-[40px] overflow-hidden shadow-2xl border-[8px] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] animate-in fade-in flex flex-col shrink-0 ${isCupModeActive ? 'border-amber-900 from-yellow-800 via-amber-900 to-[#1e1005]' : 'border-[#0B1120] from-emerald-800 via-green-900 to-green-950'}`}>
                 <div className="absolute inset-0 pointer-events-none opacity-20 mix-blend-overlay" style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 40px, #ffffff 40px, #ffffff 80px)' }}></div>
                 
@@ -1320,7 +1324,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     const posPlayers = lineup.filter(p => p.position === pos);
                     const maxPos = pos === 'GK' ? 1 : pos === 'DEF' ? 5 : pos === 'MID' ? 5 : 3;
                     
-                    // 🟢 בפלייאוף וגביע מתקדמים מאפשרים חופש במערכים 🟢
                     const allowFreeForm = isCupModeActive ? (cupSettings.stage === 'semi' || cupSettings.stage === 'final') : isPlayoffRound;
                     const effectiveMax = allowFreeForm && pos !== 'GK' ? 10 : maxPos;
                     const showGhost = isMyTeam && posPlayers.length < effectiveMax && activeLineup.length < 11;
