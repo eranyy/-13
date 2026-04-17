@@ -123,7 +123,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [transfersDriveUrl, setTransfersDriveUrl] = useState('');
   
   const [playoffRoundsInput, setPlayoffRoundsInput] = useState<string>(''); 
-  const [cupSettings, setCupSettings] = useState<any>({ isOpen: false, stage: 'groups', activeTeams: [], groupStandings: {} });
+  const [cupSettings, setCupSettings] = useState<any>({ isOpen: false, stage: 'groups', groupStandings: {} });
   const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
@@ -151,9 +151,8 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
     const unsubCup = onSnapshot(doc(db, "leagueData", "cup_settings"), (docSnap) => {
         if(docSnap.exists()) {
-            const data = docSnap.data();
-            setCupSettings(data);
-            setTempCupOverrides(data.groupStandings || {});
+            setCupSettings(docSnap.data());
+            setTempCupOverrides(docSnap.data().groupStandings || {});
         }
     });
     
@@ -187,7 +186,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
   const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => { setToast({msg, type}); if (type !== 'info') setTimeout(() => setToast(null), 5000); };
 
-  // --- פונקציות ניהול גביע 🏆 ---
   const handleUpdateCupSettings = async (updates: any) => {
       setIsSavingCup(true);
       try {
@@ -215,7 +213,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
           await setDoc(doc(db, 'leagueData', 'cup_settings'), {
               groups: { lannister, stark },
-              activeTeams: [...lannister, ...stark],
               groupStandings: { 
                   [sortedTable[0]?.id]: 0, [sortedTable[2]?.id]: 0, [sortedTable[4]?.id]: 0,
                   [sortedTable[1]?.id]: 0, [sortedTable[3]?.id]: 0, [sortedTable[5]?.id]: 0
@@ -237,7 +234,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       } catch(e) { showMessage('❌ שגיאה בעדכון', 'error'); }
       setIsSavingCup(false);
   };
-  // --------------------------------
 
   const handleSavePlayoffRounds = async () => {
     setIsSavingPlayoffs(true);
@@ -1603,33 +1599,48 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
           <div className="bg-slate-900 border border-yellow-500/50 p-6 sm:p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
             <button onClick={() => setShowCupAdminModal(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors">✕</button>
             <h3 className="text-2xl font-black text-white mb-6 text-center">עריכת נקודות גביע 🏆</h3>
-            <p className="text-xs text-slate-400 font-bold text-center mb-6">כאן ניתן לדרוס ידנית את הניקוד המצטבר של הקבוצות בשלב הבתים של הגביע.</p>
             
             <div className="space-y-6">
-                <div>
-                    <h4 className="text-yellow-400 font-black mb-3 border-b border-yellow-500/30 pb-2">בית לאניסטר</h4>
-                    <div className="space-y-3">
-                        {(cupSettings.groups?.lannister || []).map((tId: string) => (
-                            <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
-                                <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
-                                <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-yellow-500 outline-none" />
+                {cupSettings?.groups?.lannister?.length > 0 || cupSettings?.groups?.stark?.length > 0 ? (
+                    <>
+                        <div>
+                            <h4 className="text-yellow-400 font-black mb-3 border-b border-yellow-500/30 pb-2">בית לאניסטר</h4>
+                            <div className="space-y-3">
+                                {(cupSettings.groups?.lannister || []).map((tId: string) => (
+                                    <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
+                                        <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
+                                        <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-yellow-500 outline-none" />
+                                    </div>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                </div>
-                <div>
-                    <h4 className="text-blue-400 font-black mb-3 border-b border-blue-500/30 pb-2">בית סטארק</h4>
-                    <div className="space-y-3">
-                        {(cupSettings.groups?.stark || []).map((tId: string) => (
-                            <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
-                                <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
-                                <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-blue-500 outline-none" />
+                        </div>
+                        <div>
+                            <h4 className="text-blue-400 font-black mb-3 border-b border-blue-500/30 pb-2">בית סטארק</h4>
+                            <div className="space-y-3">
+                                {(cupSettings.groups?.stark || []).map((tId: string) => (
+                                    <div key={tId} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
+                                        <span className="text-white font-bold">{TEAM_NAMES[tId] || tId}</span>
+                                        <input type="number" value={tempCupOverrides[tId] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [tId]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-blue-500 outline-none" />
+                                    </div>
+                                ))}
                             </div>
-                        ))}
+                        </div>
+                    </>
+                ) : (
+                    <div>
+                        <h4 className="text-white font-black mb-3 border-b border-slate-700 pb-2">כל הקבוצות (טרם הוגרלו בתים)</h4>
+                        <div className="space-y-3">
+                            {users.filter(u => u.id !== 'admin' && u.id !== 'system').map((u: any) => (
+                                <div key={u.id} className="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-700">
+                                    <span className="text-white font-bold">{u.teamName}</span>
+                                    <input type="number" value={tempCupOverrides[u.id] || 0} onChange={e => setTempCupOverrides({...tempCupOverrides, [u.id]: Number(e.target.value)})} className="bg-slate-800 text-white font-black p-2 rounded-lg w-20 text-center border border-slate-600 focus:border-yellow-500 outline-none" />
+                                </div>
+                            ))}
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
-            
+
             <button onClick={handleSaveCupOverrides} disabled={isSavingCup} className="w-full mt-8 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-4 rounded-2xl shadow-lg transition-all active:scale-95 text-lg">שמור תוצאות מותאמות</button>
           </div>
         </div>

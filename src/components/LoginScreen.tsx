@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { collection, getDocs, addDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, doc, setDoc } from 'firebase/firestore';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { db, auth } from '../firebaseConfig';
+import { getToken } from 'firebase/messaging';
+import { db, auth, messaging } from '../firebaseConfig';
 import { authService } from '../authService';
 
 interface LoginScreenProps {
@@ -14,6 +15,32 @@ const getDeviceType = () => {
   if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) return 'Tablet';
   if (/Mobile|iP(hone|od)|Android|BlackBerry|IEMobile|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/.test(ua)) return 'Mobile';
   return 'Desktop (PC)';
+};
+
+// פונקציה לבקשת אישור התראות פוש ושמירת הטוקן
+const requestPushPermission = async (userId: string) => {
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      console.log("המשתמש אישר קבלת התראות!");
+      
+      const token = await getToken(messaging, {
+        vapidKey: "BELPkm_Y6IgLW-atBkxPKAyXnUbMagpKIuNF7oQkPLu8XdtzYXcUWD6yGIgqdLguY-OAOyZbJKV8Usm5Yi89emQ" 
+      });
+
+      if (token) {
+        console.log("Token: ", token);
+        // שמירת הטוקן במסד הנתונים תחת המשתמש
+        await setDoc(doc(db, "users", userId), {
+          fcmToken: token 
+        }, { merge: true });
+      }
+    } else {
+      console.log("המשתמש סירב לקבל התראות.");
+    }
+  } catch (error) {
+    console.error("שגיאה בהפעלת התראות:", error);
+  }
 };
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
@@ -89,6 +116,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
         authService.login(foundUser, rememberMe);
         onLogin(foundUser);
+        
+        // <<< הפעלת הבקשה לקבלת התראות פוש ושמירת הטוקן >>>
+        requestPushPermission(foundUser.id);
+        
       } else {
         console.warn(`[Login Warning] User ${inputEmail} authenticated but not found in Firestore 'users' collection.`);
         setError('המשתמש אומת אך לא נמצאה קבוצה תואמת במערכת. פנה למנהל.');

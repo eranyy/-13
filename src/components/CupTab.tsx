@@ -208,7 +208,7 @@ const CupTab: React.FC = () => {
                 <div className="flex flex-col md:flex-row items-center justify-between gap-8 md:gap-4 relative z-10">
                     
                     {/* חצי גמר 1 */}
-                    <div className="w-full md:w-[30%] bg-slate-900/80 backdrop-blur-md rounded-3xl border border-slate-700 shadow-xl overflow-hidden relative">
+                    <div className="order-1 md:order-1 w-full md:w-[30%] bg-slate-900/80 backdrop-blur-md rounded-3xl border border-slate-700 shadow-xl overflow-hidden relative">
                         <div className="bg-slate-950 py-2 text-center border-b border-slate-800 flex justify-center items-center gap-2">
                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">חצי גמר א'</span>
                             {stage === 'semi' && <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
@@ -219,8 +219,20 @@ const CupTab: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* הגמר הגדול! */}
-                    <div className={`w-full md:w-[40%] bg-gradient-to-b from-yellow-900/40 to-slate-900 backdrop-blur-xl rounded-[40px] border-2 shadow-2xl overflow-hidden relative transform md:scale-110 z-20 transition-all duration-500 ${stage === 'final' ? 'border-yellow-500/80 shadow-[0_0_50px_rgba(234,179,8,0.2)]' : 'border-slate-700 opacity-60'}`}>
+                    {/* חצי גמר 2 (הוזז להיות שני במובייל, ושלישי בדסקטופ) */}
+                    <div className="order-2 md:order-3 w-full md:w-[30%] bg-slate-900/80 backdrop-blur-md rounded-3xl border border-slate-700 shadow-xl overflow-hidden relative">
+                        <div className="bg-slate-950 py-2 text-center border-b border-slate-800 flex justify-center items-center gap-2">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">חצי גמר ב'</span>
+                            {stage === 'semi' && <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
+                        </div>
+                        <div className="p-4 space-y-3">
+                            {renderSemiFinalTeam(semi2_away, false)}
+                            {renderSemiFinalTeam(semi2_home, true)}
+                        </div>
+                    </div>
+
+                    {/* הגמר הגדול! (הוזז להיות אחרון במובייל, ובאמצע בדסקטופ) */}
+                    <div className={`order-3 md:order-2 mt-4 md:mt-0 w-full md:w-[40%] bg-gradient-to-b from-yellow-900/40 to-slate-900 backdrop-blur-xl rounded-[40px] border-2 shadow-2xl overflow-hidden relative transform md:scale-110 z-20 transition-all duration-500 ${stage === 'final' ? 'border-yellow-500/80 shadow-[0_0_50px_rgba(234,179,8,0.2)]' : 'border-slate-700 opacity-60'}`}>
                         <div className={`absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r ${stage === 'final' ? 'from-yellow-400 via-amber-300 to-yellow-600' : 'from-slate-600 to-slate-500'}`}></div>
                         <div className="bg-black/40 py-3 text-center border-b border-yellow-900/30 flex flex-col items-center justify-center">
                             <Crown className={`w-6 h-6 mb-1 ${stage === 'final' ? 'text-yellow-500' : 'text-slate-500'}`} />
@@ -258,18 +270,6 @@ const CupTab: React.FC = () => {
                                     </div>
                                 </div>
                             )}
-                        </div>
-                    </div>
-
-                    {/* חצי גמר 2 */}
-                    <div className="w-full md:w-[30%] bg-slate-900/80 backdrop-blur-md rounded-3xl border border-slate-700 shadow-xl overflow-hidden relative">
-                        <div className="bg-slate-950 py-2 text-center border-b border-slate-800 flex justify-center items-center gap-2">
-                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">חצי גמר ב'</span>
-                            {stage === 'semi' && <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
-                        </div>
-                        <div className="p-4 space-y-3">
-                            {renderSemiFinalTeam(semi2_away, false)}
-                            {renderSemiFinalTeam(semi2_home, true)}
                         </div>
                     </div>
 
