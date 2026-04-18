@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren, Trophy } from 'lucide-react';
+import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren, Trophy, Lock } from 'lucide-react';
 import { Team, Player, User } from '../types';
 import { db } from '../firebaseConfig';
 import { collection, doc, updateDoc, arrayUnion, onSnapshot, addDoc } from 'firebase/firestore';
@@ -163,6 +163,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [adminOverrideData, setAdminOverrideData] = useState<{playersIn: any[], playersOut: any[]} | null>(null);
 
   const [playoffRounds, setPlayoffRounds] = useState<number[]>([]);
+  const [globalLock, setGlobalLock] = useState<boolean>(false);
   const [cupSettings, setCupSettings] = useState<{isOpen: boolean, stage: string, activeTeams: string[]}>({ isOpen: false, stage: 'groups', activeTeams: [] });
 
   const showToast = (msg: string, type: 'error' | 'success' | 'info') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
@@ -188,6 +189,9 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     );
   })();
 
+  const currentRole = String(loggedInUser?.role || '');
+  const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
+
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'leagueData', 'real_fixtures'), doc => {
       if(doc.exists()) {
@@ -196,8 +200,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     });
 
     const unsubSettings = onSnapshot(doc(db, 'leagueData', 'settings'), doc => {
-        if(doc.exists() && doc.data().playoffRounds) {
-            setPlayoffRounds(doc.data().playoffRounds);
+        if(doc.exists()) {
+            const data = doc.data();
+            if (data.playoffRounds) setPlayoffRounds(data.playoffRounds);
+            if (data.globalLock !== undefined) setGlobalLock(data.globalLock);
         }
     });
 
@@ -328,8 +334,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       isFormationValid = activeLineup.length === 11 && ALLOWED_FORMATIONS.includes(currentFormationStr) && gks === 1;
   }
 
-  // 🟢 פונקציית בדיקת המשחקים - חסינה לטקסטים והכי חשוב - קוראת מהסוף להתחלה כדי לקחת תמיד את המשחק החדש ביותר 🟢
+  // 🟢 פונקציית בדיקת המשחקים החדשה: ללא תלות בתוצאות, רק שעה ותאריך מוחלטים מהסוף להתחלה 🟢
   const checkIsMatchStarted = (playerRealTeam: string) => {
+    if (globalLock && !isManagerOrAdmin) {
+        return true;
+    }
+
     if (!playerRealTeam) return false;
     
     const getTeamName = (teamData: any) => {
@@ -338,7 +348,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         return teamData.name || teamData.id || '';
     };
 
-    // קריאת המערך ב-Reverse מונעת נעילה בגלל משחקים ישנים מההיסטוריה ששמורים בפיירבייס
     const match = [...realFixtures].reverse().find(m => {
         const hName = m.h || getTeamName(m.homeTeam);
         const aName = m.a || getTeamName(m.awayTeam);
@@ -347,7 +356,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
     if (!match) return false;
 
-    // בדיקת גיבוי: האם כבר יש תוצאה במספר?
     const hScoreRaw = match.hs ?? match.homeScore ?? match.homeTeamScore ?? match.scoreHome ?? match.score;
     const aScoreRaw = match.as ?? match.awayScore ?? match.awayTeamScore ?? match.scoreAway;
     
@@ -490,14 +498,15 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     const currentActiveLineup = lineup.filter(p => p && p.id && POS_ARRAY.includes(p.position));
     const currentActiveBench = bench.filter(p => p && p.id);
 
-    const currentRole = String(loggedInUser?.role || '');
-    const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
-
     if (checkIsMatchStarted(player.team)) {
         if (!isManagerOrAdmin) {
-            return showToast(`❌ המשחק של ${player.team} כבר התחיל או ישוחק בקרוב מאוד! לא ניתן לעדכן.`, 'error');
+            if (globalLock) {
+                return showToast(`❌ המחזור נעול! לא ניתן לבצע שינויים הקשורים ל-${player.name}.`, 'error');
+            } else {
+                return showToast(`❌ המשחק של ${player.team} כבר התחיל או ישוחק בקרוב מאוד! לא ניתן לעדכן.`, 'error');
+            }
         } else {
-            showToast(`⚠️ אזהרת מנהל: המשחק של ${player.team} החל. אישור סופי של החילוף יידרש בשמירה.`, 'info');
+            showToast(`⚠️ אזהרת מנהל: המשחק של ${player.team} החל או המחזור נעול. אישור סופי של החילוף יידרש בשמירה.`, 'info');
         }
     }
 
@@ -645,19 +654,18 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         }
     }
 
-    const currentRole = String(loggedInUser?.role || '');
-    const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
-
     if (lockedPlayerFound) {
         if (!isManagerOrAdmin) {
             const playersInNamesStr = playersIn.map((p:any) => p.name).join(', ') || 'אין';
             const playersOutNamesStr = playersOut.map((p:any) => p.name).join(', ') || 'אין';
             
-            const waText = `*בקשת חילוף חריג ממנהל זירה* 🚨\n\nהמשחק של ${lockedPlayerFound.team} כבר התחיל.\nאשמח לאישור ידני להרכב שלי:\n\n⬇️ יורד מהדשא: ${playersOutNamesStr}\n⬆️ עולה להרכב: ${playersInNamesStr}`;
+            const waText = globalLock 
+                ? `*בקשת אישור חילוף במחזור נעול* 🚨\n\nהיי מנהל זירה, המחזור נעול כעת.\nאשמח לאישור חריג להרכב שלי:\n\n⬇️ יורד מהדשא: ${playersOutNamesStr}\n⬆️ עולה להרכב: ${playersInNamesStr}`
+                : `*בקשת חילוף חריג ממנהל זירה* 🚨\n\nהמשחק של ${lockedPlayerFound.team} כבר התחיל.\nאשמח לאישור ידני להרכב שלי:\n\n⬇️ יורד מהדשא: ${playersOutNamesStr}\n⬆️ עולה להרכב: ${playersInNamesStr}`;
 
             setAppAlert({
-                title: 'שגיאה: המשחק התחיל',
-                msg: `המשחק של ${lockedPlayerFound.team} כבר החל!\nלא ניתן לעדכן את ${lockedPlayerFound.name}. אם יש סיבה חריגה (כמו דחיית משחק), שלח הודעה למנהל הזירה:`,
+                title: globalLock ? 'המחזור נעול' : 'שגיאה: המשחק התחיל',
+                msg: globalLock ? 'המחזור ננעל על ידי ההנהלה. לא ניתן לבצע שינויים בשלב זה. בקש אישור חריג במידת הצורך.' : `המשחק של ${lockedPlayerFound.team} כבר החל!\nלא ניתן לעדכן את ${lockedPlayerFound.name}. אם יש סיבה חריגה (כמו דחיית משחק), שלח הודעה למנהל הזירה:`,
                 type: 'error',
                 whatsappText: waText
             });
@@ -728,19 +736,16 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const executeTransfer = async () => {
     if (!isMyTeam || !myTeam) return;
 
-    const currentRole = String(loggedInUser?.role || '');
-    const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
-
     if (transferType === 'OUT') {
        const playerToSell = (myTeam.squad || []).find((p: any) => p.id === playerOutId);
        if (playerToSell && checkIsMatchStarted(playerToSell.team) && !isManagerOrAdmin) {
-           return showToast(`❌ המשחק של ${playerToSell.team} כבר החל! לא ניתן למכור את השחקן.`, 'error');
+           return showToast(`❌ המשחק של ${playerToSell.team} כבר החל (או המחזור נעול)! לא ניתן למכור.`, 'error');
        }
     }
     
     if (transferType === 'IN') {
        if (newPlayerTeam && checkIsMatchStarted(newPlayerTeam) && !isManagerOrAdmin) {
-           return showToast(`❌ המשחק של ${newPlayerTeam} כבר החל! לא ניתן לרכוש ממנה שחקנים כעת.`, 'error');
+           return showToast(`❌ המשחק של ${newPlayerTeam} כבר החל (או המחזור נעול)! לא ניתן לרכוש.`, 'error');
        }
     }
 
@@ -954,9 +959,22 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         </div>
       )}
 
-      {/* 🟢 באנר פלייאוף צעקני - יופיע רק אם במוד ליגה ופלייאוף פעיל 🟢 */}
-      {isPlayoffRound && !isCupModeActive && (
-          <div className="bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
+      {/* 🟢 באנר נעילה גלובלית 🟢 */}
+      {globalLock && (
+          <div className="bg-gradient-to-r from-red-600 via-red-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
+              <div className="flex items-center gap-4">
+                  <Lock className="w-8 h-8 text-white" />
+                  <div>
+                      <h3 className="text-white font-black text-lg md:text-xl tracking-wide">המחזור נעול לעדכונים!</h3>
+                      <p className="text-white/80 text-xs md:text-sm font-bold">לא ניתן לבצע חילופים או שינויים בהרכב בשלב זה.</p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 🟢 באנר פלייאוף צעקני 🟢 */}
+      {isPlayoffRound && !isCupModeActive && !globalLock && (
+          <div className="bg-gradient-to-r from-purple-600 via-rose-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
               <div className="flex items-center gap-4">
                   <Siren className="w-8 h-8 text-white" />
                   <div>
@@ -967,7 +985,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           </div>
       )}
 
-      {/* 🟢 באנר חלון גביע (יופיע רק אם פתוח ורק לקבוצות הרלוונטיות) 🟢 */}
+      {/* 🟢 באנר חלון גביע 🟢 */}
       {cupSettings.isOpen && cupSettings.activeTeams?.includes(myTeam.id) && (
           <div className="bg-gradient-to-r from-yellow-600 via-amber-500 to-orange-500 p-1 md:p-1.5 rounded-[24px] shadow-2xl flex flex-col md:flex-row items-center justify-between gap-3 relative z-50 mt-2 mb-6">
               <div className="flex items-center gap-3 px-4 py-2">
@@ -1026,7 +1044,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
             </div>
             <h3 className="text-2xl font-black text-white mb-2">אישור חילוף חריג</h3>
             <p className="text-slate-400 font-bold mb-6 whitespace-pre-wrap leading-relaxed">
-              שים לב! המשחק של חלק מהשחקנים בחילוף זה כבר התחיל.<br/>
+              שים לב! המשחק של חלק מהשחקנים בחילוף זה כבר התחיל או שהמחזור נעול כעת.<br/>
               בתור מנהל זירה/אדמין, האם תרצה לאשר את החילוף בכל זאת?
             </p>
             <div className="flex gap-3 w-full">
@@ -1143,7 +1161,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                   
                   <div className="space-y-3 mb-6">
                     <div className="relative">
-                      <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
+                      <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!isMyTeam || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
                         <option value="">בחר שחקן יוצא (מההרכב)</option>
                         {lineup.sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
                       </select>
@@ -1151,7 +1169,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     </div>
                     
                     <div className="relative">
-                      <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!isMyTeam} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
+                      <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!isMyTeam || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
                         <option value="">בחר שחקן נכנס (מהספסל)</option>
                         {bench.map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
                       </select>
@@ -1159,7 +1177,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     </div>
                     
                     <div className="flex gap-2 pt-2">
-                      <button onClick={handleHalftimeSub} disabled={!isMyTeam || !subOutId || !subInId} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
+                      <button onClick={handleHalftimeSub} disabled={!isMyTeam || !subOutId || !subInId || globalLock} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
                         בצע חילוף ⚡
                       </button>
                     </div>
@@ -1334,9 +1352,9 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                       <div 
                         key={pos} 
                         onClick={() => { 
-                          if (isMyTeam) setActiveZone(pos as any); 
+                          if (isMyTeam && (!globalLock || isManagerOrAdmin)) setActiveZone(pos as any); 
                         }}
-                        className={`flex-1 flex flex-col justify-center items-center w-full relative group ${isMyTeam ? 'cursor-pointer' : ''} ${rowZIndex}`}
+                        className={`flex-1 flex flex-col justify-center items-center w-full relative group ${isMyTeam && (!globalLock || isManagerOrAdmin) ? 'cursor-pointer' : ''} ${rowZIndex}`}
                       >
                         <div className="absolute inset-x-2 inset-y-1 bg-white/0 group-hover:bg-white/5 rounded-2xl transition-colors border border-transparent group-hover:border-white/10 border-dashed flex items-center justify-center pointer-events-none"></div>
 
@@ -1376,7 +1394,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
                           {showGhost && (
                              <div 
-                               onClick={(e) => { e.stopPropagation(); setActiveZone(pos as any); }}
+                               onClick={(e) => { e.stopPropagation(); if (!globalLock || isManagerOrAdmin) setActiveZone(pos as any); }}
                                className="relative flex flex-col items-center justify-start cursor-pointer opacity-60 hover:opacity-100 transition-opacity w-[46px] sm:w-[60px]"
                              >
                                <div className="w-11 h-11 sm:w-14 sm:h-14 md:w-16 md:h-16">
@@ -1406,11 +1424,11 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                <div className="col-span-2 lg:col-span-2">
                  <button 
-                   onClick={() => isMyTeam ? setShowTransferModal(true) : null}
-                   className={`w-full h-full min-h-[120px] rounded-[32px] border-2 flex flex-col items-center justify-center gap-2 transition-all shadow-xl ${isMyTeam ? 'bg-gradient-to-br from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 text-white border-blue-400/50 active:scale-[0.98]' : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'}`}
+                   onClick={() => isMyTeam && (!globalLock || isManagerOrAdmin) ? setShowTransferModal(true) : null}
+                   className={`w-full h-full min-h-[120px] rounded-[32px] border-2 flex flex-col items-center justify-center gap-2 transition-all shadow-xl ${isMyTeam && (!globalLock || isManagerOrAdmin) ? 'bg-gradient-to-br from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 text-white border-blue-400/50 active:scale-[0.98]' : 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed'}`}
                  >
                    <ArrowRightLeft className="w-8 h-8 md:w-10 md:h-10 mb-1" />
-                   <span className="text-xl md:text-2xl font-black">{isMyTeam ? 'בצע רכש / מכירה' : 'מצב צפייה בלבד'}</span>
+                   <span className="text-xl md:text-2xl font-black">{isMyTeam && (!globalLock || isManagerOrAdmin) ? 'בצע רכש / מכירה' : globalLock && !isManagerOrAdmin ? 'השוק נעול' : 'מצב צפייה בלבד'}</span>
                  </button>
                </div>
 
@@ -1507,10 +1525,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         <div className="bg-black/80 backdrop-blur-2xl p-2.5 rounded-[32px] border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-3 w-full max-w-[380px] pointer-events-auto transition-all animate-in slide-in-from-bottom-10">
            <button 
              onClick={handleSaveLineup} 
-             disabled={isSaving || !isFormationValid || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11)} 
-             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${isFormationValid && (isPlayoffRound || isCupModeActive || activeLineup.length === 11) ? (isCupModeActive ? 'bg-gradient-to-r from-yellow-400 to-amber-600 text-black hover:brightness-110 active:scale-95 shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95') : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
+             disabled={isSaving || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11) || (globalLock && !isManagerOrAdmin)} 
+             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${globalLock && !isManagerOrAdmin ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : isFormationValid && (isPlayoffRound || isCupModeActive || activeLineup.length === 11) ? (isCupModeActive ? 'bg-gradient-to-r from-yellow-400 to-amber-600 text-black hover:brightness-110 active:scale-95 shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95') : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
            >
-             {isSaving ? (
+             {globalLock && !isManagerOrAdmin ? (
+               <span className="text-sm">המחזור נעול 🔒</span>
+             ) : isSaving ? (
                <span className="animate-pulse">שומר...</span>
              ) : !isFormationValid && activeLineup.length === 11 ? (
                <>

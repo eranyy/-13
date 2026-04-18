@@ -3,7 +3,7 @@ import { db, auth } from './firebaseConfig';
 import { analyzeMatchImage, generateAISummary, generateRumors } from './geminiService'; 
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff } from 'lucide-react'; // 🟢 הוספנו Bell, BellOff
+import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff, Lock, Unlock } from 'lucide-react';
 import { parseFantasyExcel } from './utils/FantasyExcelParser'; 
 
 interface AdminSettingsProps { onClose?: () => void; isAdmin?: boolean; inline?: boolean; initialSubTab?: string; }
@@ -123,9 +123,11 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [transfersDriveUrl, setTransfersDriveUrl] = useState('');
   
   const [playoffRoundsInput, setPlayoffRoundsInput] = useState<string>(''); 
-  const [cupSettings, setCupSettings] = useState<any>({ isOpen: false, stage: 'groups', groupStandings: {} });
+  const [cupSettings, setCupSettings] = useState<any>({ isOpen: false, stage: 'groups', activeTeams: [], groupStandings: {} });
   const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
+  const [globalLock, setGlobalLock] = useState<boolean>(false);
+
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
   const sheetsApiKey = 'AIzaSyARwamUBjcirbqFtWn_RpKkOdiHmeGlis0';
   const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('gemini_api_key') || 'AIzaSyBM6ArDeYA0oRuOLQPXt4qVIGDSrQALaYQ');
@@ -146,13 +148,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             if (data.playoffRounds && Array.isArray(data.playoffRounds)) {
                 setPlayoffRoundsInput(data.playoffRounds.join(', '));
             }
+            if (data.globalLock !== undefined) {
+                setGlobalLock(data.globalLock);
+            }
         }
     });
 
     const unsubCup = onSnapshot(doc(db, "leagueData", "cup_settings"), (docSnap) => {
         if(docSnap.exists()) {
-            setCupSettings(docSnap.data());
-            setTempCupOverrides(docSnap.data().groupStandings || {});
+            const data = docSnap.data();
+            setCupSettings(data);
+            setTempCupOverrides(data.groupStandings || {});
         }
     });
     
@@ -186,6 +192,18 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
   const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => { setToast({msg, type}); if (type !== 'info') setTimeout(() => setToast(null), 5000); };
 
+  const toggleGlobalLock = async () => {
+      setLoading(true);
+      const newLockState = !globalLock;
+      try {
+          await setDoc(doc(db, 'leagueData', 'settings'), { globalLock: newLockState }, { merge: true });
+          showMessage(`✅ נעילת המחזור ${newLockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
+      } catch (e) {
+          showMessage('❌ שגיאה בעדכון מצב הנעילה', 'error');
+      }
+      setLoading(false);
+  };
+
   const handleUpdateCupSettings = async (updates: any) => {
       setIsSavingCup(true);
       try {
@@ -213,6 +231,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
           await setDoc(doc(db, 'leagueData', 'cup_settings'), {
               groups: { lannister, stark },
+              activeTeams: [...lannister, ...stark],
               groupStandings: { 
                   [sortedTable[0]?.id]: 0, [sortedTable[2]?.id]: 0, [sortedTable[4]?.id]: 0,
                   [sortedTable[1]?.id]: 0, [sortedTable[3]?.id]: 0, [sortedTable[5]?.id]: 0
@@ -996,7 +1015,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             name: seasonArchiveName,
             champ: winner?.teamName || 'N/A',
             runnerUp: runnerUp?.teamName || 'N/A',
-            cup: cupWinner || 'N/A', // 🟢 שדה זוכת הגביע שהוספנו 🟢
+            cup: cupWinner || 'N/A',
             relegated: sortedTable[sortedTable.length - 1]?.teamName || 'N/A',
             date: new Date().toISOString()
         };
@@ -1017,7 +1036,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         
         batch.set(doc(db, 'leagueData', 'fixtures'), { rounds: [], lastUpdated: new Date().toISOString() });
         batch.set(doc(db, 'leagueData', 'real_fixtures'), { matches: [], lastUpdated: new Date().toISOString() });
-        batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1 });
+        batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1, globalLock: false }); // 🟢 שחרור מנעול בסיום עונה
         
         await batch.commit();
         showMessage('✅ העונה הסתיימה! הנתונים אופסו והארכיון עודכן.', 'success');
@@ -1159,6 +1178,31 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 {(loading || isSyncingTable) ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Flame className="w-5 h-5" />}
                 {(loading || isSyncingTable) ? 'מחשב נתונים...' : 'חשב טבלה, מומנטום ופיצ\'רים עכשיו 🧮'}
               </button>
+            </div>
+
+            {/* 🟢 פאנל נעילת מחזור גלובלית 🟢 */}
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 blur-[50px] pointer-events-none rounded-full"></div>
+              <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
+                {globalLock ? <Lock className="text-orange-500" /> : <Unlock className="text-slate-400" />} 
+                נעילת מחזור גלובלית
+              </h3>
+              <p className="text-slate-400 text-sm font-bold mb-6 relative z-10">
+                כשהמחזור נעול, אף מנג'ר לא יוכל לבצע חילופים או לערוך הרכבים, ללא קשר לשעות המשחקים (מנהלים עדיין יוכלו).
+              </p>
+              <div className="flex items-center gap-4 relative z-10">
+                <button 
+                  onClick={toggleGlobalLock} 
+                  disabled={loading}
+                  className={`flex-1 md:max-w-xs py-4 px-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${globalLock ? 'bg-orange-500 text-black shadow-orange-500/30 border border-orange-400' : 'bg-slate-950 text-slate-300 border border-slate-700 hover:bg-slate-900'}`}
+                >
+                  {globalLock ? (
+                      <><Lock className="w-5 h-5" /> המחזור נעול</>
+                  ) : (
+                      <><Unlock className="w-5 h-5" /> המחזור פתוח</>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-blue-500/30 shadow-xl animate-in fade-in zoom-in-95">
