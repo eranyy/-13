@@ -10,8 +10,8 @@ const getApiKey = (providedKey?: string) => {
          GEMINI_API_KEY;
 };
 
-// 🟢 פונקציית עזר ליצירת Timeout כדי שהאפליקציה לא תיתקע לנצח 🟢
-const fetchWithTimeout = async (promise: Promise<any>, timeoutMs: number = 20000) => {
+// 🟢 פונקציית עזר למניעת תקיעות - מוקצב ל-45 שניות (זמן סביר לסריקת מסמכים) 🟢
+const fetchWithTimeout = async (promise: Promise<any>, timeoutMs: number = 45000) => {
     let timer: NodeJS.Timeout;
     const timeoutPromise = new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error(`Timeout: The request took longer than ${timeoutMs / 1000} seconds`)), timeoutMs);
@@ -29,7 +29,9 @@ const fetchWithTimeout = async (promise: Promise<any>, timeoutMs: number = 20000
 
 export const analyzeMatchImage = async (base64Data: string, mimeType: string, hint?: string, apiKey?: string) => {
   const activeKey = getApiKey(apiKey);
-  const ai = new GoogleGenAI({ apiKey: activeKey });
+  
+  // 🟢 שימוש ב-v1beta - זה מה שהשרת של האתר החי שלך דורש 🟢
+  const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any); 
   
   const prompt = `אתה סוכן AI מומחה ופדנט לחילוץ נתונים מטבלאות ספורט מורכבות ומסמכי PDF רשמיים.
 אני מספק לך תמונה או קובץ PDF של משחקי ליגת העל בכדורגל (ישראל). 
@@ -56,30 +58,32 @@ export const analyzeMatchImage = async (base64Data: string, mimeType: string, hi
 - "stadium": (מחרוזת) חלץ את שם המגרש/אצטדיון בעברית (למשל "סמי עופר", "בלומפילד", "דוחא", "טרנר", "שלמה ביטוח"). אם לא מופיע, החזר "".
 - "tvChannel": (מחרוזת) ערוץ שידור אם יש, אחרת "".`;
 
+  // 🟢 שימוש במודל הרשמי והיציב ביותר עבור פרודקשן 🟢
+  const modelName = "gemini-1.5-flash-latest";
+
   try {
-    console.log("Sending request to Gemini model: gemini-1.5-flash...");
-    const requestPromise = ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Data } }] }]
-    });
+      console.log(`מפעיל חילוץ PDF/תמונה עם ${modelName}...`);
+      const requestPromise = ai.models.generateContent({
+        model: modelName,
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Data } }] }]
+      });
 
-    const response = await fetchWithTimeout(requestPromise, 25000); // 25 שניות גג
+      const response = await fetchWithTimeout(requestPromise, 45000); 
 
-    const text = response.text;
-    if (!text) throw new Error("No response from Gemini AI");
+      const text = response.text;
+      if (!text) throw new Error("No response from Gemini AI");
 
-    const cleanJsonText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    console.log("Successfully extracted data:", cleanJsonText);
-    return JSON.parse(cleanJsonText);
+      const cleanJsonText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+      return JSON.parse(cleanJsonText);
   } catch (error: any) {
-    console.error("Gemini AI Image Analysis Error:", error);
-    throw new Error(error.message || "Failed to analyze image with Gemini AI");
+      console.error(`שגיאה בחילוץ נתונים (${modelName}):`, error);
+      throw new Error(`שגיאת התחברות לשרת ה-AI: ${error.message}. נסה לרענן את העמוד או נסה שוב מאוחר יותר.`);
   }
 };
 
 export const generateAISummary = async (fixtures: any[], teams: any[], apiKey?: string) => {
     const activeKey = getApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: activeKey });
+    const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any);
 
     const sortedTeams = [...teams].filter(t => t.id !== 'admin' && t.id !== 'system').sort((a, b) => {
         const aPts = a.points || 0; const bPts = b.points || 0;
@@ -111,18 +115,18 @@ ${fixturesText}
 הסיכום צריך לכלול כותרת מפוצצת, התייחסות למובילת הטבלה, וסלנג כדורגל ישראלי. החזר בפורמט Markdown.`;
 
     try {
-        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
-        const response = await fetchWithTimeout(requestPromise, 15000);
+        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash-latest", contents: prompt });
+        const response = await fetchWithTimeout(requestPromise, 25000);
         return response.text || "";
-    } catch (e) {
-        console.error("Summary generation failed:", e);
-        throw e;
+    } catch (error: any) {
+        console.error("Summary generation failed:", error);
+        throw error;
     }
 };
 
 export const generateRumors = async (teams: any[], apiKey?: string) => {
     const activeKey = getApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: activeKey });
+    const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any);
 
     const teamsWithPlayersText = teams.filter(t => t.id !== 'admin' && t.id !== 'system').map(t => {
         const playersList = (t.squad || []).map((p: any) => p.name).filter(Boolean).join(', ');
@@ -143,11 +147,11 @@ ${teamsWithPlayersText}
 החזר את השמועות בפורמט Markdown בצורה של מבזקי חדשות.`;
 
     try {
-        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
-        const response = await fetchWithTimeout(requestPromise, 15000);
+        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash-latest", contents: prompt });
+        const response = await fetchWithTimeout(requestPromise, 25000);
         return response.text || "";
-    } catch (e) {
-        console.error("Rumors generation failed:", e);
-        throw e;
+    } catch (error: any) {
+        console.error("Rumors generation failed:", error);
+        throw error;
     }
 };

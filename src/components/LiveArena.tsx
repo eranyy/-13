@@ -83,7 +83,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
   const [h2hModal, setH2hModal] = useState<{hId: string, aId: string} | null>(null);
   
-  // 🟢 משתנים חדשים עבור דוח ה-VAR 🟢
   const [auditModal, setAuditModal] = useState<{hId: string, aId: string} | null>(null);
   const [auditActiveTab, setAuditActiveTab] = useState<'h' | 'a'>('h');
   const [auditGroupByReal, setAuditGroupByReal] = useState(false);
@@ -263,20 +262,8 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
     showToast('מייצר תמונה ברמת ליגת האלופות... 📸', 'info');
 
-    let shareText = `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥\n\n`;
-    const currentMatches = fixtures.find(r => r.round === currentRound)?.matches || [];
-    
-    currentMatches.forEach((match: any) => {
-        const hScore = calculateTeamScore(match.h);
-        const aScore = calculateTeamScore(match.a);
-        const hName = TEAM_NAMES[match.h] || match.h;
-        const aName = TEAM_NAMES[match.a] || match.a;
-        const hUntouched = getUntouchedCount(match.h);
-        const aUntouched = getUntouchedCount(match.a);
-        
-        shareText += `⚽ ${hName} (${hScore}) - (${aScore}) ${aName}\n`;
-        shareText += `⏱️ בקנה: ${hName} (${hUntouched}) | ${aName} (${aUntouched})\n\n`;
-    });
+    // 🟢 הורדתי את הלופ של המשחקים מפה, נשארה רק הכותרת הנקייה 🟢
+    let shareText = `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥`;
 
     try {
       const canvas = await html2canvas(el, { 
@@ -947,6 +934,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                                    )}
                                  </div>
                               ) : <span>{log.playerIn || log.playerOut}</span>}
+
+                              {log.actionBy && (
+                                  <div className="mt-3 text-[9px] md:text-[10px] text-slate-400 font-bold bg-black/40 inline-block px-2.5 py-1 rounded-md border border-white/10">
+                                      ✍️ בוצע ע"י: <span className="text-slate-300">{log.actionBy}</span>
+                                  </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1044,7 +1037,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             const aScore = calculateTeamScore(match.a);
             const isExpanded = expandedTeamId === match.h || expandedTeamId === match.a;
             
-            // חישוב אירועי הלייב והשחקנים שנותרו
             const hEvents = getTeamLiveEvents(match.h);
             const aEvents = getTeamLiveEvents(match.a);
             const hUntouched = getUntouchedCount(match.h);
@@ -1244,7 +1236,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                   </div>
                 )}
                 
-                {/* 🟢 כאן הוספתי את הפיצול של הכפתורים - H2H ודוח הניקוד (VAR) 🟢 */}
                 <div className="flex w-full bg-slate-900/30 border-t border-slate-800" data-html2canvas-ignore="true">
                     <button onClick={(e) => { e.stopPropagation(); setH2hModal({hId: match.h, aId: match.a}); }} className="flex-1 py-2 border-l border-slate-800 flex justify-center items-center gap-2 text-slate-500 hover:text-white hover:bg-slate-800/50 transition-colors">
                        <Swords className="w-4 h-4" /><span className="text-xs font-black">H2H</span>
@@ -1407,6 +1398,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       )}
 
+      {/* --- המודל שקופץ שמציג את היסטוריית הראש-בראש --- */}
       {h2hModal && (() => {
         const h2hData = getH2HData(h2hModal.hId, h2hModal.aId);
         const t1Name = TEAM_NAMES[h2hModal.hId] || h2hModal.hId;
