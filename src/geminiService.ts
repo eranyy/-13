@@ -30,8 +30,8 @@ const fetchWithTimeout = async (promise: Promise<any>, timeoutMs: number = 45000
 export const analyzeMatchImage = async (base64Data: string, mimeType: string, hint?: string, apiKey?: string) => {
   const activeKey = getApiKey(apiKey);
   
-  // 🟢 שימוש ב-v1beta - זה מה שהשרת של האתר החי שלך דורש 🟢
-  const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any); 
+  // 🟢 שימוש ב-SDK המודרני 🟢
+  const ai = new GoogleGenAI({ apiKey: activeKey }); 
   
   const prompt = `אתה סוכן AI מומחה ופדנט לחילוץ נתונים מטבלאות ספורט מורכבות ומסמכי PDF רשמיים.
 אני מספק לך תמונה או קובץ PDF של משחקי ליגת העל בכדורגל (ישראל). 
@@ -58,8 +58,8 @@ export const analyzeMatchImage = async (base64Data: string, mimeType: string, hi
 - "stadium": (מחרוזת) חלץ את שם המגרש/אצטדיון בעברית (למשל "סמי עופר", "בלומפילד", "דוחא", "טרנר", "שלמה ביטוח"). אם לא מופיע, החזר "".
 - "tvChannel": (מחרוזת) ערוץ שידור אם יש, אחרת "".`;
 
-  // 🟢 שימוש במודל הרשמי והיציב ביותר עבור פרודקשן 🟢
-  const modelName = "gemini-1.5-flash-latest";
+  // 🟢 שימוש במודל החדיש והיציב ביותר 🟢
+  const modelName = "gemini-3-flash-preview";
 
   try {
       console.log(`מפעיל חילוץ PDF/תמונה עם ${modelName}...`);
@@ -83,7 +83,7 @@ export const analyzeMatchImage = async (base64Data: string, mimeType: string, hi
 
 export const generateAISummary = async (fixtures: any[], teams: any[], apiKey?: string) => {
     const activeKey = getApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any);
+    const ai = new GoogleGenAI({ apiKey: activeKey });
 
     const sortedTeams = [...teams].filter(t => t.id !== 'admin' && t.id !== 'system').sort((a, b) => {
         const aPts = a.points || 0; const bPts = b.points || 0;
@@ -115,7 +115,7 @@ ${fixturesText}
 הסיכום צריך לכלול כותרת מפוצצת, התייחסות למובילת הטבלה, וסלנג כדורגל ישראלי. החזר בפורמט Markdown.`;
 
     try {
-        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash-latest", contents: prompt });
+        const requestPromise = ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
         const response = await fetchWithTimeout(requestPromise, 25000);
         return response.text || "";
     } catch (error: any) {
@@ -126,7 +126,7 @@ ${fixturesText}
 
 export const generateRumors = async (teams: any[], apiKey?: string) => {
     const activeKey = getApiKey(apiKey);
-    const ai = new GoogleGenAI({ apiKey: activeKey, apiVersion: 'v1beta' } as any);
+    const ai = new GoogleGenAI({ apiKey: activeKey });
 
     const teamsWithPlayersText = teams.filter(t => t.id !== 'admin' && t.id !== 'system').map(t => {
         const playersList = (t.squad || []).map((p: any) => p.name).filter(Boolean).join(', ');
@@ -147,7 +147,7 @@ ${teamsWithPlayersText}
 החזר את השמועות בפורמט Markdown בצורה של מבזקי חדשות.`;
 
     try {
-        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash-latest", contents: prompt });
+        const requestPromise = ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
         const response = await fetchWithTimeout(requestPromise, 25000);
         return response.text || "";
     } catch (error: any) {

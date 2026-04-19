@@ -379,7 +379,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     const timeMatch = timeStr.match(/(\d{1,2}):(\d{2})/);
     if (!timeMatch) return false;
 
-    const dateMatch = dateStr.match(/(\d{1,2})[\/\.-](\d{1,2})/);
+    const dateMatch = dateStr.match(/(\d{1,2})[/.-](\d{1,2})/);
     if (!dateMatch) return false;
 
     const matchHours = parseInt(timeMatch[1], 10);

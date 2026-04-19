@@ -3,7 +3,7 @@ import { db, auth } from './firebaseConfig';
 import { analyzeMatchImage, generateAISummary, generateRumors } from './geminiService'; 
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff, Lock, Unlock } from 'lucide-react';
+import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff, Lock, Unlock, Edit3, Plus, X } from 'lucide-react';
 import { parseFantasyExcel } from './utils/FantasyExcelParser'; 
 
 interface AdminSettingsProps { onClose?: () => void; isAdmin?: boolean; inline?: boolean; initialSubTab?: string; }
@@ -127,10 +127,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
   const [globalLock, setGlobalLock] = useState<boolean>(false);
+  const [systemCurrentRound, setSystemCurrentRound] = useState<number>(1);
 
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
   const sheetsApiKey = 'AIzaSyARwamUBjcirbqFtWn_RpKkOdiHmeGlis0';
   const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('gemini_api_key') || 'AIzaSyBM6ArDeYA0oRuOLQPXt4qVIGDSrQALaYQ');
+
+  // 🟢 משתנים למנהל משחקים ידני (נפתח כמודל) 🟢
+  const [realFixturesMatches, setRealFixturesMatches] = useState<any[]>([]);
+  const [showFixtureModal, setShowFixtureModal] = useState(false);
+  const [editingMatchIndex, setEditingMatchIndex] = useState<number | null>(null);
+  const [editingMatchData, setEditingMatchData] = useState<any>(null);
 
   useEffect(() => {
     const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => setUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -151,6 +158,9 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             if (data.globalLock !== undefined) {
                 setGlobalLock(data.globalLock);
             }
+            if (data.currentRound !== undefined) {
+                setSystemCurrentRound(data.currentRound);
+            }
         }
     });
 
@@ -161,8 +171,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             setTempCupOverrides(data.groupStandings || {});
         }
     });
+
+    // 🟢 מאזין למשחקים החיים ב-real_fixtures 🟢
+    const unsubRealFixtures = onSnapshot(doc(db, "leagueData", "real_fixtures"), (docSnap) => {
+        if(docSnap.exists()) {
+            setRealFixturesMatches(docSnap.data().matches || []);
+        } else {
+            setRealFixturesMatches([]);
+        }
+    });
     
-    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); unsubCup(); };
+    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); unsubCup(); unsubRealFixtures(); };
   }, []);
 
   useEffect(() => {
@@ -742,7 +761,8 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 extractedMatches.forEach((m: any) => {
                     const exists = newMatches.find(em => 
                         normalizeTeamName(em.homeTeam) === normalizeTeamName(m.homeTeam) && 
-                        normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam)
+                        normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam) &&
+                        em.round === m.round
                     );
                     if (!exists) newMatches.push(m);
                 });
@@ -764,292 +784,291 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
     }
   };
 
+  // 🟢 פונקציות מנהל משחקים ידני 🟢
+  const saveManualMatchEdit = async () => {
+      if (editingMatchIndex === null || !editingMatchData) return;
+      try {
+          const newMatches = [...realFixturesMatches];
+          newMatches[editingMatchIndex] = editingMatchData;
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
+              matches: newMatches,
+              lastUpdated: new Date().toISOString()
+          }, { merge: true });
+          showMessage('✅ המשחק נשמר בהצלחה', 'success');
+          setEditingMatchIndex(null);
+          setEditingMatchData(null);
+      } catch (e) { showMessage('❌ שגיאה בשמירת המשחק', 'error'); }
+  };
+
   const syncTableFromDrive = async () => {
-    if (!tableDriveUrl.trim()) return showMessage('❌ חסר קישור CSV!', 'error');
+    if (!tableDriveUrl.trim()) return showMessage('❌ נא להזין קישור CSV תקין', 'error');
+    setLoading(true);
     setIsSyncingTable(true);
-    showMessage('מושך נתוני טבלה... 📊', 'info');
+    showMessage('מושך נתונים מהאקסל... ⏳', 'info');
     try {
         const res = await fetch(tableDriveUrl);
-        if (!res.ok) throw new Error('לא הצלחתי למשוך את הקובץ. ודא שהקישור תקין וציבורי.');
+        if (!res.ok) throw new Error('נכשל בהורדת הקובץ מהקישור שסופק');
         const csvText = await res.text();
-        const lines = csvText.split('\n');
+        const rows = csvText.split('\n').map(row => parseCsvRow(row));
         
         const batch = writeBatch(db);
         let updatedCount = 0;
         
-        for (let i = 1; i < lines.length; i++) {
-            const row = parseCsvRow(lines[i]);
-            if (row.length < 10) continue; 
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (row.length < 5) continue;
             
-            const teamName = row[1] || row[42]; 
-            if (!teamName) continue;
-
-            const points = parseInt(row[37]) || 0; 
-            const gf = parseInt(row[39]) || 0;     
-            const ga = parseInt(row[40]) || 0;     
-
-            const normalizedCsvTeam = getNormalizedTeamId(teamName);
-            const userDoc = users.find(u => getNormalizedTeamId(u.teamName) === normalizedCsvTeam || getNormalizedTeamId(u.id) === normalizedCsvTeam);
-
-            if (userDoc) {
+            const teamName = row[0];
+            const played = parseInt(row[1]) || 0;
+            const gf = parseInt(row[2]) || 0;
+            const ga = parseInt(row[3]) || 0;
+            const points = parseInt(row[4]) || 0;
+            
+            const normId = getNormalizedTeamId(teamName);
+            const user = users.find(u => getNormalizedTeamId(u.teamName) === normId || u.id === normId);
+            
+            if (user) {
+                batch.update(doc(db, 'users', user.id), {
+                    played, points, gf, ga,
+                    wins: parseInt(row[5]) || 0,
+                    draws: parseInt(row[6]) || 0,
+                    losses: parseInt(row[7]) || 0
+                });
                 updatedCount++;
-                let exactPlayed = 0;
-                let exactWins = 0;
-                let exactDraws = 0;
-                let exactLosses = 0;
-                const matchHistory: string[] = [];
-
-                fixtures.forEach((round: any) => {
-                    const matches = round.matches || [];
-                    matches.forEach((match: any) => {
-                        const home = getNormalizedTeamId(match.h || match.homeTeam);
-                        const away = getNormalizedTeamId(match.a || match.awayTeam);
-
-                        if (home === normalizedCsvTeam || away === normalizedCsvTeam) {
-                            const hScore = match.hs !== undefined ? match.hs : match.homeScore;
-                            const aScore = match.as !== undefined ? match.as : match.awayScore;
-
-                            if (hScore !== undefined && aScore !== undefined && hScore !== null && hScore !== '') {
-                                exactPlayed++;
-                                const isHome = home === normalizedCsvTeam;
-                                const myScore = Number(isHome ? hScore : aScore);
-                                const oppScore = Number(isHome ? aScore : hScore);
-
-                                if (myScore > oppScore) {
-                                    exactWins++;
-                                    matchHistory.push('W');
-                                } else if (myScore < oppScore) {
-                                    exactLosses++;
-                                    matchHistory.push('L');
-                                } else {
-                                    exactDraws++;
-                                    matchHistory.push('D');
-                                }
-                            }
-                        }
-                    });
-                });
-
-                const recentForm = matchHistory.slice(-5);
-
-                batch.update(doc(db, 'users', userDoc.id), {
-                    points: points,       
-                    gf: gf,                
-                    ga: ga,                
-                    played: exactPlayed,  
-                    wins: exactWins,      
-                    draws: exactDraws,    
-                    losses: exactLosses,  
-                    recentForm: recentForm 
-                });
             }
         }
-        
         await batch.commit();
-        showMessage(`✅ הטבלה והמומנטום עודכנו בהצלחה ל-${updatedCount} קבוצות!`, 'success');
+        showMessage(`✅ סונכרנו ${updatedCount} קבוצות מהאקסל בהצלחה!`, 'success');
         setTableDriveUrl('');
     } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בסנכרון טבלה: ' + e.message, 'error');
+        showMessage('❌ שגיאה בסנכרון: ' + e.message, 'error');
     } finally {
+        setLoading(false);
         setIsSyncingTable(false);
     }
   };
 
-  const handleSyncSquadsFromDrive = async () => {
-    if (!squadsDriveUrl.trim()) return showMessage('❌ חסר קישור CSV סגלים!', 'error');
-    setLoading(true);
-    showMessage('מנתח סגלים ומפיץ לקבוצות... 🪄', 'info');
+  const handleRestoreTeam = async (team: any) => {
+      setLoading(true);
+      try {
+          const { deletedAt, ...teamData } = team;
+          await setDoc(doc(db, 'users', team.id), teamData);
+          await deleteDoc(doc(db, 'deleted_users', team.id));
+          showMessage(`✅ הקבוצה ${team.teamName} שוחזרה בהצלחה!`, 'success');
+      } catch (e) {
+          showMessage('❌ שגיאה בשחזור הקבוצה', 'error');
+      }
+      setLoading(false);
+  };
 
+  const handleSyncSquadsFromDrive = async () => {
+    if (!squadsDriveUrl.trim()) return showMessage('❌ נא להזין קישור CSV לסגלים', 'error');
+    setLoading(true);
+    showMessage('מושך סגלים מהאקסל... ⏳', 'info');
     try {
         const res = await fetch(squadsDriveUrl);
-        if (!res.ok) throw new Error('לא הצלחתי למשוך את הקובץ.');
+        if (!res.ok) throw new Error('נכשל בהורדת הקובץ');
         const csvText = await res.text();
+        const rows = csvText.split('\n').map(row => parseCsvRow(row));
         
-        const parsedPlayers = parseFantasyExcel(csvText);
-        
-        if (parsedPlayers.length === 0) throw new Error('לא נמצאו שחקנים בקובץ. ודא שהפורמט תקין.');
-
-        const batch = writeBatch(db);
-
-        const playersSnap = await getDocs(collection(db, 'players'));
-        playersSnap.docs.forEach(d => batch.delete(d.ref));
-
         const teamSquads: Record<string, any[]> = {};
         
-        parsedPlayers.forEach(player => {
-            const teamKey = getNormalizedTeamId(player.fantasyTeam);
+        rows.forEach((row, i) => {
+            if (i === 0 || row.length < 3) return;
+            const teamKey = getNormalizedTeamId(row[0]);
+            if (!teamKey) return;
             if (!teamSquads[teamKey]) teamSquads[teamKey] = [];
-            teamSquads[teamKey].push({ ...player, isStarting: false, points: 0 });
             
-            const newPlayerRef = doc(collection(db, 'players'));
-            batch.set(newPlayerRef, player);
-        });
-
-        let updatedTeamsCount = 0;
-
-        users.forEach(user => {
-            if (user.id === 'admin' || user.id === 'system') return;
-            
-            const userKey = getNormalizedTeamId(user.teamName) || getNormalizedTeamId(user.id);
-            const squadForThisTeam = teamSquads[userKey] || [];
-            
-            if (squadForThisTeam.length > 0) updatedTeamsCount++;
-
-            const userRef = doc(db, 'users', user.id);
-            batch.update(userRef, {
-                squad: squadForThisTeam,
-                players: squadForThisTeam,
-                lineup: [],
-                published_lineup: [],
-                published_subs_out: squadForThisTeam
+            teamSquads[teamKey].push({
+                name: row[1],
+                pos: row[2],
+                team: row[3] || '',
+                points: 0,
+                stats: { started: false, played60: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, red: false }
             });
         });
 
+        const batch = writeBatch(db);
+        let count = 0;
+        users.forEach(u => {
+            const key = getNormalizedTeamId(u.teamName);
+            if (teamSquads[key]) {
+                batch.update(doc(db, 'users', u.id), { squad: teamSquads[key] });
+                count++;
+            }
+        });
         await batch.commit();
-        showMessage(`✅ סונכרנו ${parsedPlayers.length} שחקנים. נכנסו לסגלים של ${updatedTeamsCount} קבוצות!`, 'success');
+        showMessage(`✅ סונכרנו סגלים ל-${count} קבוצות בהצלחה!`, 'success');
         setSquadsDriveUrl('');
     } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בסנכרון: ' + e.message, 'error');
-    } finally {
-        setLoading(false);
+        showMessage('❌ שגיאה בסנכרון סגלים: ' + e.message, 'error');
     }
-  };
-
-  const handleRestoreTeam = async (team: any) => {
-    setLoading(true);
-    try {
-        await setDoc(doc(db, 'users', team.id), {
-            ...team,
-            isApproved: true
-        });
-        await deleteDoc(doc(db, 'deleted_users', team.id));
-        showMessage(`✅ הקבוצה ${team.teamName} שוחזרה בהצלחה!`, 'success');
-    } catch (e: any) {
-        showMessage('❌ שגיאה בשחזור.', 'error');
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const executePermanentDelete = async () => {
-    if (!deleteConfirmId) return;
-    setLoading(true);
-    try {
-        await deleteDoc(doc(db, 'deleted_users', deleteConfirmId));
-        showMessage('✅ נמחק לצמיתות.', 'success');
-    } catch (e: any) {
-        showMessage('❌ שגיאה במחיקה.', 'error');
-    } finally {
-        setLoading(false);
-        setDeleteConfirmId(null);
-    }
+    setLoading(false);
   };
 
   const handleCreateNewUser = async () => {
-    if (!newUser.teamName || !newUser.email) return showMessage('❌ חסרים פרטים!', 'error');
-    setLoading(true);
-    try {
-        const teamId = cleanStr(newUser.teamName);
-        await setDoc(doc(db, 'users', teamId), {
-            ...newUser,
-            name: newUser.manager,
-            points: 0, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0,
-            recentForm: [], createdAt: new Date().toISOString()
-        });
-        
-        showMessage(`✅ הקבוצה ${newUser.teamName} נוספה בהצלחה!`, 'success');
-        setShowAddUser(false);
-        setNewUser({ teamName: '', manager: '', assistantName: '', email: '', assistantEmail: '', role: 'USER', isApproved: true, assistants: [] });
-    } catch (e: any) {
-        showMessage('❌ שגיאה בהוספה.', 'error');
-    } finally {
-        setLoading(false);
-    }
+      if (!newUser.email || !newUser.teamName) return showMessage('אימייל ושם קבוצה הם חובה!', 'error');
+      setLoading(true);
+      try {
+          const teamId = getNormalizedTeamId(newUser.teamName) || newUser.email.split('@')[0];
+          await setDoc(doc(db, 'users', teamId), {
+              ...newUser,
+              name: newUser.manager,
+              points: 0,
+              played: 0,
+              gf: 0, ga: 0,
+              wins: 0, draws: 0, losses: 0,
+              squad: [],
+              players: [],
+              budget: 100,
+              isApproved: true,
+              createdAt: new Date().toISOString()
+          });
+          showMessage('✅ קבוצה חדשה נוצרה בהצלחה! השתמש באיפוס סיסמה כדי לקבוע סיסמה ראשונה.', 'success');
+          setShowAddUser(false);
+          setNewUser({ teamName: '', manager: '', assistantName: '', email: '', assistantEmail: '', role: 'USER', isApproved: true, assistants: [] });
+      } catch (e) {
+          showMessage('❌ שגיאה ביצירת הקבוצה', 'error');
+      }
+      setLoading(false);
   };
 
   const handleSaveUserEdit = async () => {
-    if (!editingUser) return;
-    setLoading(true);
-    try {
-        await updateDoc(doc(db, 'users', editingUser.id), editingUser);
-        showMessage('✅ השינויים נשמרו בהצלחה.', 'success');
-        setEditingUser(null);
-    } catch (e: any) {
-        showMessage('❌ שגיאה בשמירה.', 'error');
-    } finally {
-        setLoading(false);
-    }
+      if (!editingUser) return;
+      setLoading(true);
+      try {
+          await updateDoc(doc(db, 'users', editingUser.id), editingUser);
+          showMessage('✅ השינויים נשמרו בהצלחה!', 'success');
+          setEditingUser(null);
+      } catch (e) {
+          showMessage('❌ שגיאה בשמירת השינויים', 'error');
+      }
+      setLoading(false);
   };
 
   const handleSendResetEmail = async (email: string) => {
-    try {
-        await sendPasswordResetEmail(auth, email);
-        showMessage(`✅ אימייל איפוס נשלח ל-${email}!`, 'success');
-    } catch (e: any) {
-        showMessage('❌ שגיאה בשליחת אימייל.', 'error');
-    }
+      if (!email) return showMessage('אין כתובת אימייל לשליחה', 'error');
+      try {
+          await sendPasswordResetEmail(auth, email);
+          showMessage(`✅ אימייל לאיפוס סיסמה נשלח ל-${email}`, 'success');
+      } catch (e: any) {
+          showMessage('❌ שגיאה בשליחת אימייל: ' + e.message, 'error');
+      }
+  };
+
+  const executePermanentDelete = async () => {
+      if (!deleteConfirmId) return;
+      setLoading(true);
+      try {
+          const archivedTeam = deletedTeams.find(t => t.id === deleteConfirmId);
+          if (archivedTeam) {
+              await deleteDoc(doc(db, 'deleted_users', deleteConfirmId));
+              showMessage('✅ הוסרה לצמיתות מהארכיון.', 'success');
+          } else {
+              const userRef = doc(db, 'users', deleteConfirmId);
+              const userSnap = await getDoc(userRef);
+              if (userSnap.exists()) {
+                  await setDoc(doc(db, 'deleted_users', deleteConfirmId), {
+                      ...userSnap.data(),
+                      deletedAt: new Date().toISOString()
+                  });
+                  await deleteDoc(userRef);
+                  showMessage('✅ הקבוצה הועברה לארכיון המחיקות.', 'success');
+              }
+          }
+          setDeleteConfirmId(null);
+      } catch (e) {
+          showMessage('❌ שגיאה בתהליך המחיקה', 'error');
+      }
+      setLoading(false);
   };
 
   const handleEndSeason = async () => {
-    if (endSeasonPwd !== 'LUZON13') return showMessage('❌ סיסמה שגויה!', 'error');
-    setLoading(true);
-    showMessage('מסיים עונה... מנקה נתונים... 🏁', 'info');
-    try {
-        const activeTeams = users.filter(u => u.id !== 'admin' && u.id !== 'system' && u.teamName);
-        const sortedTable = [...activeTeams].sort((a, b) => {
-            const aPts = a.points || 0; const bPts = b.points || 0;
-            if (bPts !== aPts) return bPts - aPts;
-            return ((b.gf || 0) - (b.ga || 0)) - ((a.gf || 0) - (a.ga || 0));
-        });
-
-        const historySnap = await getDoc(doc(db, 'leagueData', 'history'));
-        const seasons = historySnap.exists() ? historySnap.data().seasons : [];
-        
-        const winner = sortedTable[0];
-        const runnerUp = sortedTable[1];
-        
-        const newSeasonRecord = {
-            season: seasons.length + 1,
-            name: seasonArchiveName,
-            champ: winner?.teamName || 'N/A',
-            runnerUp: runnerUp?.teamName || 'N/A',
-            cup: cupWinner || 'N/A',
-            relegated: sortedTable[sortedTable.length - 1]?.teamName || 'N/A',
-            date: new Date().toISOString()
-        };
-        
-        await setDoc(doc(db, 'leagueData', 'history'), {
-            seasons: [newSeasonRecord, ...seasons]
-        });
-        
-        const batch = writeBatch(db);
-        users.forEach(u => {
-            if (u.id !== 'admin' && u.id !== 'system') {
-                batch.update(doc(db, 'users', u.id), {
-                    points: 0, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0,
-                    recentForm: [], squad: [], lineup: [], published_lineup: [], published_subs_out: [], transfers: []
-                });
-            }
-        });
-        
-        batch.set(doc(db, 'leagueData', 'fixtures'), { rounds: [], lastUpdated: new Date().toISOString() });
-        batch.set(doc(db, 'leagueData', 'real_fixtures'), { matches: [], lastUpdated: new Date().toISOString() });
-        batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1, globalLock: false }); // 🟢 שחרור מנעול בסיום עונה
-        
-        await batch.commit();
-        showMessage('✅ העונה הסתיימה! הנתונים אופסו והארכיון עודכן.', 'success');
-        setShowEndSeason(false);
-        setEndSeasonPwd('');
-        setCupWinner('');
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בסיום עונה.', 'error');
-    } finally {
-        setLoading(false);
-    }
+      if (!endSeasonPwd || endSeasonPwd !== 'eran2024') {
+          return showMessage('❌ סיסמת אדמין לא נכונה!', 'error');
+      }
+      setLoading(true);
+      try {
+          const seasonData = {
+              name: seasonArchiveName,
+              cupWinner,
+              users: users.filter(u => u.id !== 'admin' && u.id !== 'system').map(u => ({ 
+                  id: u.id, 
+                  teamName: u.teamName, 
+                  points: u.points, 
+                  manager: u.name 
+              })),
+              timestamp: new Date().toISOString()
+          };
+          await addDoc(collection(db, 'season_archive'), seasonData);
+          
+          const batch = writeBatch(db);
+          users.forEach(u => {
+              if (u.id !== 'admin' && u.id !== 'system') {
+                  batch.update(doc(db, 'users', u.id), {
+                      points: 0, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0,
+                      squad: [], players: [], lineup: [], budget: 100,
+                      recentForm: [], streakFire: false, streakClown: false, ironDefense: false
+                  });
+              }
+          });
+          
+          batch.update(doc(db, 'leagueData', 'fixtures'), { rounds: [] });
+          batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1 });
+          
+          await batch.commit();
+          showMessage(`🏆 עונת ${seasonArchiveName} ננעלה! האפליקציה מאופסת לעונה הבאה.`, 'success');
+          setShowEndSeason(false);
+          setEndSeasonPwd('');
+          setCupWinner('');
+      } catch (e) {
+          showMessage('❌ שגיאה בסגירת העונה', 'error');
+      }
+      setLoading(false);
   };
+
+  const deleteManualMatch = async (index: number) => {
+      if(!window.confirm('למחוק משחק זה?')) return;
+      try {
+          const newMatches = realFixturesMatches.filter((_, i) => i !== index);
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
+              matches: newMatches,
+              lastUpdated: new Date().toISOString()
+          }, { merge: true });
+          showMessage('✅ משחק נמחק', 'success');
+      } catch (e) { showMessage('❌ שגיאה במחיקת המשחק', 'error'); }
+  };
+
+  const addNewManualMatch = async () => {
+      try {
+          const newMatches = [...realFixturesMatches, {
+              round: systemCurrentRound,
+              homeTeam: 'קבוצת בית',
+              awayTeam: 'קבוצת חוץ',
+              date: '01/01',
+              time: '20:00',
+              stadium: '',
+              tvChannel: ''
+          }];
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
+              matches: newMatches,
+              lastUpdated: new Date().toISOString()
+          }, { merge: true });
+          showMessage('✅ שורת משחק חדשה נוספה לסוף הרשימה!', 'success');
+          setEditingMatchIndex(newMatches.length - 1);
+          setEditingMatchData(newMatches[newMatches.length - 1]);
+      } catch (e) { showMessage('❌ שגיאה ביצירת המשחק', 'error'); }
+  };
+
+  // 🟢 קיבוץ משחקים לפי מחזור 🟢
+  const matchesByRound = (realFixturesMatches || []).reduce((acc, match, idx) => {
+      if (!match) return acc;
+      const roundStr = match.round ? `מחזור ${match.round}` : 'מחזור לא מוגדר';
+      if (!acc[roundStr]) acc[roundStr] = [];
+      acc[roundStr].push({ ...match, originalIndex: idx });
+      return acc;
+  }, {} as Record<string, any[]>);
+
 
   return (
     <div className="p-4 md:p-8 bg-slate-900 min-h-screen text-white pb-24" dir="rtl">
@@ -1180,7 +1199,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </button>
             </div>
 
-            {/* 🟢 פאנל נעילת מחזור גלובלית 🟢 */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
@@ -1233,7 +1251,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                           }`}>
                             {u.role === 'ADMIN' ? 'אדמין (ערן)' : u.role === 'ARENA_MANAGER' ? 'מנהל זירה' : 'מנג\'ר'}
                           </span>
-                          {/* 🟢 חיווי התראות פוש 🟢 */}
                           {u.fcmToken ? (
                             <span title="מאושר להתראות פוש" className="bg-green-500/10 text-green-400 p-1.5 rounded-lg border border-green-500/30">
                               <Bell className="w-3.5 h-3.5" />
@@ -1379,6 +1396,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                   }}
                 ></textarea>
               </div>
+            </div>
+
+            {/* 🟢 --- כפתור פתיחת מנהל משחקים ידני (מודל) --- 🟢 */}
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-emerald-500/30 shadow-xl relative overflow-hidden mt-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                <div className="relative z-10">
+                    <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2"><Edit3 className="text-emerald-500" /> ניהול משחקים ידני</h3>
+                    <p className="text-slate-400 text-sm font-bold">ה-AI פספס משחק? תתקן או תוסיף ידנית בחלון ניהול ייעודי.</p>
+                </div>
+                <button onClick={() => setShowFixtureModal(true)} className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-2xl font-black transition-all active:scale-95 shadow-lg shrink-0 flex items-center justify-center gap-2 relative z-10">
+                    <Edit3 className="w-5 h-5" /> פתח מנהל משחקים
+                </button>
             </div>
 
             {/* 🟢 אזור הגדרת מחזורי פלייאוף באדמין */}
@@ -1572,11 +1600,92 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
       {/* --- חלונות קופצים (Modals) --- */}
 
+      {/* 🟢 מודל (חלון צף) לעריכת משחקים ידנית עם תמיכה במספר מחזור 🟢 */}
+      {showFixtureModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
+          <div className="bg-slate-900 border border-emerald-500/50 p-6 md:p-8 rounded-[40px] w-full max-w-5xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            <div className="flex justify-between items-center mb-6 shrink-0 border-b border-slate-800 pb-4">
+              <h3 className="text-2xl font-black text-white flex items-center gap-3">
+                 <Edit3 className="text-emerald-500"/> עריכת לוח משחקים ידנית <span className="text-slate-500 text-base">({realFixturesMatches.length} באוויר)</span>
+              </h3>
+              <div className="flex items-center gap-3 shrink-0">
+                 <button onClick={addNewManualMatch} className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm px-4 py-2 rounded-xl flex items-center gap-2 transition-all shadow-lg active:scale-95 font-bold">
+                     <Plus className="w-4 h-4" /> הוסף משחק
+                 </button>
+                 <button onClick={() => setShowFixtureModal(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black"><X className="w-5 h-5"/></button>
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+              {Object.keys(matchesByRound).length === 0 ? (
+                  <div className="text-center py-10 bg-slate-900/50 rounded-2xl border border-slate-700 text-slate-500 font-bold">אין משחקים פעילים במערכת. לחץ "הוסף משחק" כדי להתחיל.</div>
+              ) : (
+                  Object.keys(matchesByRound).sort((a,b) => {
+                      const numA = parseInt(a.replace(/\D/g, '')) || 0;
+                      const numB = parseInt(b.replace(/\D/g, '')) || 0;
+                      return numA - numB;
+                  }).map(roundName => (
+                      <div key={roundName} className="mb-8 bg-slate-900/40 p-4 rounded-2xl border border-slate-800 shadow-inner">
+                          <h4 className="text-emerald-400 font-black mb-4 flex items-center gap-2">
+                              <CalendarDays className="w-5 h-5"/> {roundName}
+                          </h4>
+                          <div className="space-y-3">
+                              {matchesByRound[roundName].map((matchObj: any) => {
+                                  const idx = matchObj.originalIndex;
+                                  const isEditing = editingMatchIndex === idx;
+
+                                  return (
+                                      <div key={idx} className="bg-slate-950 p-4 md:p-5 rounded-2xl border border-slate-700/80 hover:border-emerald-500/30 transition-colors flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-sm">
+                                          
+                                          {isEditing ? (
+                                              <div className="flex-1 grid grid-cols-2 md:grid-cols-7 gap-3 w-full">
+                                                  <input type="number" value={editingMatchData.round || ''} onChange={e => setEditingMatchData({...editingMatchData, round: Number(e.target.value)})} placeholder="מחזור" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500 text-center" />
+                                                  <input type="text" value={editingMatchData.homeTeam} onChange={e => setEditingMatchData({...editingMatchData, homeTeam: e.target.value})} placeholder="בית" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500" />
+                                                  <input type="text" value={editingMatchData.awayTeam} onChange={e => setEditingMatchData({...editingMatchData, awayTeam: e.target.value})} placeholder="חוץ" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500" />
+                                                  <input type="text" value={editingMatchData.date} onChange={e => setEditingMatchData({...editingMatchData, date: e.target.value})} placeholder="תאריך" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500 text-center" dir="ltr" />
+                                                  <input type="text" value={editingMatchData.time} onChange={e => setEditingMatchData({...editingMatchData, time: e.target.value})} placeholder="שעה" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500 text-center" dir="ltr" />
+                                                  <input type="text" value={editingMatchData.stadium} onChange={e => setEditingMatchData({...editingMatchData, stadium: e.target.value})} placeholder="אצטדיון" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500" />
+                                                  <input type="text" value={editingMatchData.tvChannel} onChange={e => setEditingMatchData({...editingMatchData, tvChannel: e.target.value})} placeholder="ערוץ" className="bg-slate-800 border border-slate-600 p-2.5 rounded-lg text-white font-bold text-sm outline-none focus:border-emerald-500" />
+                                              </div>
+                                          ) : (
+                                              <div className="flex-1 flex flex-wrap items-center gap-3">
+                                                  <span className="font-black text-white text-lg min-w-[120px]">{matchObj.homeTeam} <span className="text-slate-500 text-sm mx-1">נגד</span> {matchObj.awayTeam}</span>
+                                                  <span className="bg-slate-800 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-300 border border-slate-700">{matchObj.date} | {matchObj.time}</span>
+                                                  <span className="bg-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-300 border border-slate-700">🏟️ {matchObj.stadium || 'לא צוין'}</span>
+                                                  <span className="bg-slate-800 px-3 py-1.5 rounded-lg text-xs text-slate-300 border border-slate-700">📺 {matchObj.tvChannel || 'לא צוין'}</span>
+                                              </div>
+                                          )}
+
+                                          <div className="flex items-center justify-end gap-2 shrink-0 border-t xl:border-none border-slate-800 pt-3 xl:pt-0 mt-2 xl:mt-0">
+                                              {isEditing ? (
+                                                  <>
+                                                      <button onClick={saveManualMatchEdit} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-6 rounded-lg text-sm transition-colors shadow-md">שמור</button>
+                                                      <button onClick={() => { setEditingMatchIndex(null); setEditingMatchData(null); }} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2.5 px-4 rounded-lg text-sm transition-colors">ביטול</button>
+                                                  </>
+                                              ) : (
+                                                  <>
+                                                      <button onClick={() => { setEditingMatchIndex(idx); setEditingMatchData({...matchObj}); }} className="bg-blue-900/40 hover:bg-blue-800 text-blue-300 font-bold py-2.5 px-6 rounded-lg border border-blue-700 transition-colors text-sm">ערוך</button>
+                                                      <button onClick={() => deleteManualMatch(idx)} className="bg-red-900/40 hover:bg-red-800 text-red-300 font-bold py-2.5 px-4 rounded-lg border border-red-700 transition-colors text-sm"><Trash2 className="w-4 h-4"/></button>
+                                                  </>
+                                              )}
+                                          </div>
+                                      </div>
+                                  );
+                              })}
+                          </div>
+                      </div>
+                  ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* מודל להוספת קבוצה חדשה */}
       {showAddUser && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
           <div className="bg-slate-900 border border-green-500/50 p-6 sm:p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
-            <button onClick={() => setShowAddUser(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors">✕</button>
+            <button onClick={() => setShowAddUser(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors"><X className="w-5 h-5"/></button>
             <h3 className="text-2xl font-black text-white mb-6 text-center">הוספת קבוצה חדשה ➕</h3>
             <div className="space-y-4">
               <div><label className="text-xs text-slate-400 font-bold ml-1 mb-1 block">שם הקבוצה</label><input type="text" value={newUser.teamName} onChange={e => setNewUser({...newUser, teamName: e.target.value})} className="w-full bg-slate-950 border border-slate-700 p-3.5 rounded-xl text-white font-bold outline-none focus:border-green-500" /></div>
@@ -1602,7 +1711,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       {editingUser && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
           <div className="bg-slate-900 border border-blue-500/50 p-6 sm:p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
-            <button onClick={() => setEditingUser(null)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors">✕</button>
+            <button onClick={() => setEditingUser(null)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors"><X className="w-5 h-5"/></button>
             <h3 className="text-2xl font-black text-white mb-6 text-center">עריכת קבוצה ✏️</h3>
             <div className="space-y-4">
               <div><label className="text-xs text-slate-400 font-bold ml-1 mb-1 block">שם הקבוצה</label><input type="text" value={editingUser.teamName} onChange={e => setEditingUser({...editingUser, teamName: e.target.value})} className="w-full bg-slate-950 border border-slate-700 p-3.5 rounded-xl text-white font-bold outline-none focus:border-blue-500" /></div>
@@ -1651,7 +1760,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       {showCupAdminModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] flex items-center justify-center p-4 animate-in zoom-in-95">
           <div className="bg-slate-900 border border-yellow-500/50 p-6 sm:p-8 rounded-[40px] w-full max-w-md shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
-            <button onClick={() => setShowCupAdminModal(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors">✕</button>
+            <button onClick={() => setShowCupAdminModal(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl bg-slate-800 w-10 h-10 rounded-full flex items-center justify-center transition-colors"><X className="w-5 h-5"/></button>
             <h3 className="text-2xl font-black text-white mb-6 text-center">עריכת נקודות גביע 🏆</h3>
             
             <div className="space-y-6">

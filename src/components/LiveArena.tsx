@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
-import { ChevronDown, Download, DownloadCloud, AlertTriangle, CheckCircle2, Trophy, Flame, RefreshCw, Undo2, ClipboardList, Globe2, Share2, Image as ImageIcon, Swords, CalendarDays, X, Users } from 'lucide-react';
+import { ChevronDown, Download, DownloadCloud, AlertTriangle, CheckCircle2, Trophy, Flame, RefreshCw, Undo2, ClipboardList, Globe2, Share2, Image as ImageIcon, Swords, CalendarDays, X, Users, Edit3 } from 'lucide-react';
 import { db } from '../firebaseConfig';
-import { doc, onSnapshot, updateDoc, addDoc, collection, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, addDoc, collection, getDoc, setDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { UserRole } from '../types';
 import html2canvas from 'html2canvas';
 
@@ -22,6 +22,21 @@ const getTeamColors = (teamName: string, isGK: boolean) => {
   if (name.includes('חולוניה')) return { prim: '#a855f7', sec: '#4c1d95', text: '#ffffff' }; 
   if (name.includes('חראלה')) return { prim: '#78350f', sec: '#b91c1c', text: '#ffffff' }; 
   return { prim: '#3b82f6', sec: '#1e3a8a', text: '#ffffff' }; 
+};
+
+// --- פונקציות עזר שחסרו ---
+const cleanStr = (s?: string | null) => String(s || '').toLowerCase().replace(/['"״׳`\-\s()]/g, '');
+
+const getNormalizedTeamId = (nameOrId: string) => {
+    const s = cleanStr(nameOrId);
+    if (!s) return 'unknown';
+    if (s.includes('חרא') || s.includes('וסילי') || s === 'harale') return 'harale';
+    if (s.includes('חולו') || s.includes('holonia')) return 'holonia';
+    if (s.includes('תומ') || s.includes('tumali')) return 'tumali';
+    if (s.includes('טמפ') || s.includes('tampa')) return 'tampa';
+    if (s.includes('חמס') || s.includes('hamsili')) return 'hamsili';
+    if (s.includes('פיצ') || s.includes('pichichi')) return 'pichichi';
+    return s; 
 };
 
 const Jersey = ({ primary, secondary, textColor, text }: { primary: string, secondary: string, textColor: string, text: string }) => {
@@ -56,8 +71,6 @@ const getFormation = (lineup: any[]) => {
     const fwd = lineup.filter(p => ['FWD', 'חלוץ', 'התקפה'].includes(p.position)).length;
     return `${def}-${mid}-${fwd}`;
 };
-
-const cleanStr = (s?: string | null) => String(s || '').toLowerCase().replace(/['"״׳`\-\s]/g, '');
 
 const parseCsvRow = (str: string) => {
     let result = [];
@@ -256,13 +269,38 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       return count;
   };
 
+  const calculateTeamScore = (teamId: string) => {
+    const team = teams.find(t => t.id === teamId);
+    if (!team) return 0;
+    
+    let total = 0;
+    
+    const currentLineup = applySubstitutionsToLineup(team);
+    if (currentLineup) {
+        total += currentLineup.reduce((sum: number, p: any) => sum + (Number(p.points) || 0), 0);
+    }
+    
+    const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+    
+    roundSubs.forEach((sub: any) => {
+        const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
+        const benchedPlayerOut = allPossibleOutPlayers.find((p: any) => p.name === sub.playerOut);
+        
+        if (benchedPlayerOut) {
+            total += (Number(benchedPlayerOut.points) || 0);
+        }
+    });
+    
+    return total;
+  };
+
   const shareArenaAsImage = async () => {
     const el = document.getElementById('arena-capture-area');
     if (!el) return;
 
     showToast('מייצר תמונה ברמת ליגת האלופות... 📸', 'info');
 
-    // 🟢 הורדתי את הלופ של המשחקים מפה, נשארה רק הכותרת הנקייה 🟢
+    // 🟢 טקסט מינימליסטי לשיתוף 🟢
     let shareText = `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥`;
 
     try {
@@ -507,31 +545,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     setIsProcessingRound(false); setDriveUrlInput('');
   };
 
-  const calculateTeamScore = (teamId: string) => {
-    const team = teams.find(t => t.id === teamId);
-    if (!team) return 0;
-    
-    let total = 0;
-    
-    const currentLineup = applySubstitutionsToLineup(team);
-    if (currentLineup) {
-        total += currentLineup.reduce((sum: number, p: any) => sum + (Number(p.points) || 0), 0);
-    }
-    
-    const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
-    
-    roundSubs.forEach((sub: any) => {
-        const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
-        const benchedPlayerOut = allPossibleOutPlayers.find((p: any) => p.name === sub.playerOut);
-        
-        if (benchedPlayerOut) {
-            total += (Number(benchedPlayerOut.points) || 0);
-        }
-    });
-    
-    return total;
-  };
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape' && editingPlayer) setEditingPlayer(null); };
     window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown);
@@ -570,15 +583,8 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
   const updateStat = (field: string, value: any) => { 
     setStats(prevStats => {
         const newStats = { ...prevStats, [field]: value };
-        
-        if (field === 'conceded' && value > 0) {
-            newStats.cleanSheet = false;
-        }
-        
-        if (field === 'cleanSheet' && value === true) {
-            newStats.conceded = 0;
-        }
-        
+        if (field === 'conceded' && value > 0) newStats.cleanSheet = false;
+        if (field === 'cleanSheet' && value === true) newStats.conceded = 0;
         return newStats;
     }); 
   };
@@ -586,8 +592,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
   const resetPlayerStats = () => {
     setStats({ started: false, played60: false, notInSquad: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 });
   };
-
-  const currentMatches = fixtures.find(r => r.round === currentRound)?.matches || [];
 
   const savePlayerPoints = async () => {
     if (!editingPlayer) return;
@@ -608,16 +612,28 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       const updatedLineup = updatePlayerInList(freshTeam.published_lineup || []);
       const updatedSubsOut = updatePlayerInList(freshTeam.published_subs_out || []);
       const updatedSquad = updatePlayerInList(freshTeam.squad || []);
+
+      // 🟢 תיעוד ביומן ה-VAR של הקבוצה 🟢
+      const editLog = {
+          id: `var_${Date.now()}`,
+          type: 'VAR_POINTS_UPDATE',
+          round: currentRound,
+          playerIn: editingPlayer.player.name,
+          playerOut: `${finalPoints} נק'`,
+          actionBy: loggedInUser?.name || 'מנהל',
+          timestamp: new Date().toISOString()
+      };
       
       await updateDoc(teamRef, { 
           published_lineup: updatedLineup, 
           published_subs_out: updatedSubsOut, 
           squad: updatedSquad,
           lineup: updatedLineup,
-          players: updatedSquad
+          players: updatedSquad,
+          transfers: arrayUnion(editLog)
       });
       setEditingPlayer(null);
-      showToast('ניקוד נשמר בהצלחה!', 'success');
+      showToast('ניקוד נשמר ודוח ה-VAR עודכן!', 'success');
     } catch (e) { setAppAlert({title:'שגיאה', msg: 'שגיאה בעדכון נקודות', type: 'error'}); }
   };
 
@@ -759,6 +775,9 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       return latestTs > 0 && latestTs !== readReceipts[t.id];
   });
 
+  const currentMatches = fixtures.find(r => r.round === currentRound)?.matches || [];
+  const currentDisplayPoints = editingPlayer ? calculatePointsFromStats(stats, editingPlayer.player.position) : 0;
+
   if (loading) return (
     <div className="flex flex-col items-center justify-center pt-40 h-full gap-6">
       <div className="relative w-20 h-20 flex items-center justify-center animate-bounce"><span className="text-6xl drop-shadow-2xl">⚽</span><div className="absolute -bottom-2 w-12 h-2 bg-black/40 rounded-[100%] animate-pulse"></div></div>
@@ -774,10 +793,9 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     </div>
   );
 
-  const currentDisplayPoints = editingPlayer ? calculatePointsFromStats(stats, editingPlayer.player.position) : 0;
-
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-32 font-sans" dir="rtl">
+      
       {toast && (
         <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[9999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
           <span className="text-2xl">{toast.type === 'error' ? '🛑' : '✅'}</span>
@@ -785,7 +803,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       )}
 
-      {/* 🟢 חלונות התראות ואישור חריג 🟢 */}
       {appAlert && (
         <div className="fixed inset-0 z-[5000] flex items-center justify-center px-4 pb-[95px] md:pb-[100px] bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700 p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col items-center text-center">
@@ -794,7 +811,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             {appAlert.type === 'info' && <div className="w-20 h-20 bg-blue-500/10 rounded-full flex items-center justify-center mb-6"><span className="text-4xl">ℹ️</span></div>}
             <h3 className="text-2xl font-black text-white mb-2">{appAlert.title}</h3>
             <p className="text-slate-400 font-bold mb-8 whitespace-pre-wrap leading-relaxed">{appAlert.msg}</p>
-            
             <button onClick={() => setAppAlert(null)} className="w-full bg-slate-800 hover:bg-slate-700 text-white font-black py-4 rounded-xl transition-all active:scale-95">סגור</button>
           </div>
         </div>
@@ -830,14 +846,15 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       </div>
 
+      {/* 🟢 יומן אירועים 🟢 */}
       {isLogModalOpen && (
         <div className="fixed inset-0 z-[3000] flex items-end md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 animate-in fade-in duration-200">
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setIsLogModalOpen(false)}></div>
           <div className="bg-[#0f172a] border border-slate-800 rounded-t-[32px] md:rounded-[32px] w-full max-w-2xl shadow-2xl flex flex-col relative h-[85vh] md:max-h-[calc(100vh-140px)] animate-in slide-in-from-bottom-10 overflow-hidden">
-            <div className="p-5 md:p-6 border-b border-slate-800/50 flex justify-between items-center bg-[#0f172a] shrink-0 z-20 shadow-sm relative">
-              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700/50 rounded-full md:hidden"></div>
-              <h3 className="text-xl md:text-2xl font-black text-white flex items-center gap-3"><ClipboardList className="w-6 h-6 text-blue-400" />יומן אירועים - מחזור {currentRound}</h3>
-              <button onClick={() => setIsLogModalOpen(false)} className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors">✕</button>
+            
+            <div className="flex justify-between items-center w-full p-5 md:p-6 border-b border-slate-800 shrink-0 bg-[#0f172a] z-20 relative">
+               <h3 className="text-xl md:text-2xl font-black text-white flex items-center gap-3"><ClipboardList className="w-6 h-6 text-blue-400" />יומן אירועים</h3>
+               <button onClick={() => setIsLogModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black shrink-0"><X className="w-5 h-5"/></button>
             </div>
             
             <div className="p-4 md:p-5 bg-slate-900/50 border-b border-slate-800 flex flex-wrap justify-center gap-2 md:gap-3 shrink-0">
@@ -888,9 +905,18 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                 return (
                   <div className="space-y-4 md:space-y-6 pb-10">
                     {logsToRender.map((log: any, index: number) => {
-                      const isCancelAction = log.type === 'CANCELLED_SUB'; const isHalftime = log.type === 'HALFTIME_SUB'; const isRegularEdit = log.type === 'REGULAR_EDIT';
+                      const isCancelAction = log.type === 'CANCELLED_SUB'; 
+                      const isHalftime = log.type === 'HALFTIME_SUB'; 
+                      const isRegularEdit = log.type === 'REGULAR_EDIT';
                       const isLateEdit = log.type === 'LATE_REGULAR_EDIT';
-                      let dotColor = isCancelAction ? 'bg-red-500 ring-red-950/50' : isHalftime && log.status !== 'CANCELLED' ? 'bg-orange-500 ring-orange-950/50' : isRegularEdit ? 'bg-blue-500 ring-blue-950/50' : isLateEdit ? 'bg-purple-500 ring-purple-950/50' : 'bg-slate-600 ring-slate-900';
+                      const isVarUpdate = log.type === 'VAR_POINTS_UPDATE';
+
+                      let dotColor = isCancelAction ? 'bg-red-500 ring-red-950/50' : 
+                                     isHalftime && log.status !== 'CANCELLED' ? 'bg-orange-500 ring-orange-950/50' : 
+                                     isRegularEdit ? 'bg-blue-500 ring-blue-950/50' : 
+                                     isLateEdit ? 'bg-purple-500 ring-purple-950/50' : 
+                                     isVarUpdate ? 'bg-indigo-500 ring-indigo-950/50' :
+                                     'bg-slate-600 ring-slate-900';
                       
                       const displayTime = log.timestamp 
                           ? (log.timestamp.includes('T') ? new Date(log.timestamp).toLocaleString('he-IL', { hour12: false }) : log.timestamp) 
@@ -899,12 +925,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                       return (
                         <div key={log.id} className="flex gap-3 md:gap-4 relative group">
                           <div className="flex flex-col items-center relative z-10 w-6 shrink-0 pt-2"><div className={`w-3 h-3 rounded-full ring-4 shadow-sm z-20 ${dotColor}`}></div>{index !== logsToRender.length - 1 && <div className="w-[2px] bg-slate-800 flex-1 my-1 rounded-full group-hover:bg-slate-700 transition-colors"></div>}</div>
-                          <div className={`flex-1 p-4 md:p-5 rounded-[24px] md:rounded-[32px] border shadow-lg transition-all ${isCancelAction ? 'bg-red-950/10 border-red-900/30' : log.status === 'CANCELLED' ? 'bg-slate-900/50 border-slate-800/50 opacity-60 grayscale' : isRegularEdit ? 'bg-blue-950/10 border-blue-900/30' : isLateEdit ? 'bg-purple-950/20 border-purple-500/40' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                          <div className={`flex-1 p-4 md:p-5 rounded-[24px] md:rounded-[32px] border shadow-lg transition-all ${isCancelAction ? 'bg-red-950/10 border-red-900/30' : log.status === 'CANCELLED' ? 'bg-slate-900/50 border-slate-800/50 opacity-60 grayscale' : isRegularEdit ? 'bg-blue-950/10 border-blue-900/30' : isLateEdit ? 'bg-purple-950/20 border-purple-500/40' : isVarUpdate ? 'bg-indigo-950/20 border-indigo-500/40' : 'bg-slate-800/40 border-slate-700/60'}`}>
                             <div className="flex justify-between items-start mb-3">
                               <div className="flex items-center gap-2 md:gap-3">
-                                <span className="text-xl md:text-2xl drop-shadow-md">{isCancelAction ? '❌' : isHalftime ? '🔄' : isRegularEdit ? '📝' : isLateEdit ? '🚨' : '⚡'}</span>
+                                <span className="text-xl md:text-2xl drop-shadow-md">{isCancelAction ? '❌' : isHalftime ? '🔄' : isRegularEdit ? '📝' : isLateEdit ? '🚨' : isVarUpdate ? '⚖️' : '⚡'}</span>
                                 <div className="flex flex-col">
-                                    <span className={`text-[10px] md:text-xs font-black uppercase tracking-widest ${isCancelAction ? 'text-red-400' : isHalftime ? 'text-orange-400' : isRegularEdit ? 'text-blue-400' : isLateEdit ? 'text-purple-400' : 'text-green-400'}`}>{isCancelAction ? 'חילוף בוטל' : isHalftime ? 'חילוף מחצית' : isRegularEdit ? 'עדכון הרכב' : isLateEdit ? 'אישור מנהל זירה' : 'פעולה'}</span>
+                                    <span className={`text-[10px] md:text-xs font-black uppercase tracking-widest ${isCancelAction ? 'text-red-400' : isHalftime ? 'text-orange-400' : isRegularEdit ? 'text-blue-400' : isLateEdit ? 'text-purple-400' : isVarUpdate ? 'text-indigo-400' : 'text-green-400'}`}>{isCancelAction ? 'חילוף בוטל' : isHalftime ? 'חילוף מחצית' : isRegularEdit ? 'עדכון הרכב' : isLateEdit ? 'אישור מנהל זירה' : isVarUpdate ? 'החלטת VAR' : 'פעולה'}</span>
                                     {logTeamId === 'all' && <span className="text-[10px] text-slate-400 font-bold mt-0.5">{log.teamName || TEAM_NAMES[log.teamId]}</span>}
                                 </div>
                               </div>
@@ -933,7 +959,14 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                                      </div>
                                    )}
                                  </div>
-                              ) : <span>{log.playerIn || log.playerOut}</span>}
+                              ) : isVarUpdate ? (
+                                 <div className="flex items-center gap-3 mt-1 bg-black/20 p-2.5 md:p-3 rounded-xl border border-white/5">
+                                     <span className="text-slate-300 font-bold">עודכן ניקוד:</span>
+                                     <span className="text-indigo-400 font-black">{log.playerIn}</span>
+                                     <span className="text-slate-600 font-black">➔</span>
+                                     <span className="text-green-400 font-black">{log.playerOut}</span>
+                                 </div>
+                              ) : <span>{log.playerIn || log.playerOut || log.player}</span>}
 
                               {log.actionBy && (
                                   <div className="mt-3 text-[9px] md:text-[10px] text-slate-400 font-bold bg-black/40 inline-block px-2.5 py-1 rounded-md border border-white/10">
@@ -963,44 +996,26 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           <div className="p-5 md:p-8 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-6 relative z-10">
               
               <div className="flex flex-wrap md:flex-nowrap gap-2 md:gap-3 w-full md:w-auto order-3 md:order-1 justify-center md:justify-start" data-html2canvas-ignore="true">
-                
                 <button onClick={handleOpenLogModal} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                   <ClipboardList className="w-5 h-5 group-active:scale-90 transition-transform" />
                   <span className="text-xs md:text-sm font-bold md:hidden">יומן</span>
                   <span className="hidden md:inline font-bold text-sm ml-1">יומן</span>
                   {hasAnyUnreadGlobal && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span></span>}
-                  
-                  <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50 shadow-xl border border-slate-700 pointer-events-none hidden md:block">
-                      יומן אירועי מחזור
-                  </span>
                 </button>
 
                 <button onClick={shareArenaAsImage} className="flex-1 md:flex-none p-3 md:p-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl border border-blue-500/50 transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)] flex items-center justify-center gap-2 group relative active:scale-95">
                   <ImageIcon className="w-5 h-5 group-active:scale-90 transition-transform" />
                   <span className="text-xs md:text-sm font-bold md:hidden">שתף</span>
-                  <span className="hidden md:inline font-bold text-sm ml-1">שתף</span>
-                  
-                  <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50 shadow-xl border border-slate-700 pointer-events-none hidden md:block">
-                      שיתוף תמונת זירה
-                  </span>
+                  <span className="hidden md:inline font-bold text-sm ml-1">שתף לווצאפ</span>
                 </button>
 
                 {isModerator && (
                   <>
                     <button onClick={() => setDriveModalOpen(true)} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-blue-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                       <DownloadCloud className={`w-5 h-5 group-active:scale-90 transition-transform ${isProcessingRound ? 'animate-bounce text-blue-400' : ''}`} />
-                      
-                      <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50 shadow-xl border border-slate-700 pointer-events-none hidden md:block">
-                          סנכרון מהאקסל
-                      </span>
                     </button>
-
                     <button onClick={exportArenaToExcel} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-green-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                       <Download className="w-5 h-5 group-active:scale-90 transition-transform" />
-                      
-                      <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50 shadow-xl border border-slate-700 pointer-events-none hidden md:block">
-                          ייצוא נתונים לאקסל
-                      </span>
                     </button>
                   </>
                 )}
@@ -1021,10 +1036,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                 {isModerator ? (
                   <button onClick={() => setConfirmCloseModalOpen(true)} disabled={isProcessingRound} className="w-full md:w-auto bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white font-black py-3 md:py-3.5 px-6 rounded-2xl border border-red-500/50 transition-all active:scale-95 text-sm shadow-lg flex items-center justify-center gap-2 group relative">
                     {isProcessingRound ? <span className="animate-pulse">מעבד...</span> : <>סגור מחזור <Flame className="w-4 h-4" /></>}
-                    
-                    <span className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-50 shadow-xl border border-slate-700 pointer-events-none hidden md:block">
-                        סיום מחזור ואיפוס הרכבים
-                    </span>
                   </button>
                 ) : <div className="hidden md:block w-[180px]"></div>}
               </div>
@@ -1052,7 +1063,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     <button onClick={() => toggleTeam(match.h)} className={`flex-1 flex flex-col justify-center items-center md:items-start px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.h ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת בית</span>
                       <span className={`text-lg md:text-2xl font-black ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
-                      {/* תצוגת "שחקנים שנותרו" מתחת לשם הקבוצה */}
                       <span className="text-[9px] md:text-[10px] text-slate-400 font-bold mt-1.5 bg-slate-900/50 px-2 py-0.5 rounded border border-slate-700/50 whitespace-nowrap">
                         בקנה: {hUntouched} שחקנים
                       </span>
@@ -1060,19 +1070,13 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
                     {/* --- לוח התוצאות ואזור האייקונים (כרטיסים/שערים) --- */}
                     <div className="shrink-0 flex flex-col items-center justify-center bg-slate-950/80 px-4 md:px-8 border-x border-slate-800 relative z-20 shadow-inner py-2">
-                      
-                      {/* אירועי לייב (מעל התוצאה) */}
                       <div className="flex justify-between w-full px-2 mb-1">
-                          {/* אירועי בית */}
                           <div className="flex gap-1.5 items-center">
                               {hEvents.goals > 0 && <span className="flex items-center gap-0.5 text-white text-[10px] font-black"><span className="text-xs">⚽</span>{hEvents.goals}</span>}
                               {hEvents.yellows > 0 && <span className="flex items-center gap-0.5 text-yellow-400 text-[10px] font-black"><div className="w-1.5 h-2.5 bg-yellow-400 rounded-sm"></div>{hEvents.yellows}</span>}
                               {hEvents.reds > 0 && <span className="flex items-center gap-0.5 text-red-500 text-[10px] font-black"><div className="w-1.5 h-2.5 bg-red-500 rounded-sm"></div>{hEvents.reds}</span>}
                           </div>
-
-                          <div className="w-4"></div> {/* מרווח אמצע */}
-
-                          {/* אירועי חוץ */}
+                          <div className="w-4"></div>
                           <div className="flex gap-1.5 items-center">
                               {aEvents.reds > 0 && <span className="flex items-center gap-0.5 text-red-500 text-[10px] font-black">{aEvents.reds}<div className="w-1.5 h-2.5 bg-red-500 rounded-sm"></div></span>}
                               {aEvents.yellows > 0 && <span className="flex items-center gap-0.5 text-yellow-400 text-[10px] font-black">{aEvents.yellows}<div className="w-1.5 h-2.5 bg-yellow-400 rounded-sm"></div></span>}
@@ -1080,20 +1084,17 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                           </div>
                       </div>
 
-                      {/* התוצאה עצמה */}
                       <div className="flex items-center justify-center gap-3 md:gap-5 w-full">
                           <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : hScore < aScore ? 'text-slate-500' : 'text-white'}`}>{hScore}</span>
                           <span className="text-xl md:text-2xl font-black text-slate-700 pb-1">:</span>
                           <span className={`text-3xl md:text-5xl font-black tabular-nums tracking-tighter ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.4)]' : aScore < hScore ? 'text-slate-500' : 'text-white'}`}>{aScore}</span>
                       </div>
-
                     </div>
 
                     {/* --- קבוצת חוץ --- */}
                     <button onClick={() => toggleTeam(match.a)} className={`flex-1 flex flex-col justify-center items-center md:items-end px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.a ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת חוץ</span>
                       <span className={`text-lg md:text-2xl font-black ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>
-                      {/* תצוגת "שחקנים שנותרו" מתחת לשם הקבוצה */}
                       <span className="text-[9px] md:text-[10px] text-slate-400 font-bold mt-1.5 bg-slate-900/50 px-2 py-0.5 rounded border border-slate-700/50 whitespace-nowrap">
                         בקנה: {aUntouched} שחקנים
                       </span>
@@ -1150,8 +1151,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                                   const hasPlayed = (p.stats && Object.values(p.stats).some(v => v === true || (typeof v === 'number' && v > 0))) || (Number(p.points) !== 0);
                                   const isUntouched = !hasPlayed && Number(p.points) === 0;
 
+                                  const isEditable = isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(teamObj?.teamName || ''));
+
                                   return (
-                                    <div key={p.id} onClick={() => setEditingPlayer({teamId: expandedTeamId!, player: p})} className="flex flex-col items-center gap-0.5 group active:scale-95 transition-transform w-[48px] sm:w-[64px] md:w-[76px] relative cursor-pointer">
+                                    <div key={p.id} onClick={() => { if(isEditable) setEditingPlayer({teamId: expandedTeamId!, player: p}); }} className={`flex flex-col items-center gap-0.5 group active:scale-95 transition-transform w-[48px] sm:w-[64px] md:w-[76px] relative ${isEditable ? 'cursor-pointer' : ''}`}>
                                       <div className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 relative transition-all duration-300 group-hover:-translate-y-2 group-hover:scale-110 z-20">
                                         <Jersey primary={colors.prim} secondary={colors.sec} textColor={colors.text} text={['GK', 'שוער'].includes(p.position) ? '🧤' : p.position} />
                                         
@@ -1189,49 +1192,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                         </div>
                       </div>
 
-                      {(() => {
-                        const team = teams.find(t => t.id === expandedTeamId!);
-                        const subs = (team?.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
-
-                        if (subs.length === 0) return null;
-
-                        return (
-                          <div className="mt-6 bg-slate-900 rounded-[24px] p-4 md:p-5 border border-slate-800 shadow-inner">
-                            <div className="text-xs font-black text-orange-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                              <RefreshCw className="w-4 h-4" /><span>חילופי מחצית ({subs.length}/3)</span>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                              {subs.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).map((sub: any, sIdx: number) => {
-                                const playerOutObj = (team?.squad || []).find((p: any) => p.name === sub.playerOut);
-                                const playerInObj = (team?.squad || []).find((p: any) => p.name === sub.playerIn);
-
-                                return (
-                                  <div key={sIdx} className="bg-slate-950 p-2.5 md:p-3 rounded-xl border border-slate-700 flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                                      <button onClick={() => playerOutObj && setEditingPlayer({ teamId: expandedTeamId!, player: playerOutObj })} className={`flex flex-col items-start min-w-0 group flex-1 cursor-pointer`}>
-                                        <span className="text-[8px] md:text-[9px] text-slate-500 font-bold uppercase tracking-wider">יצא</span>
-                                        <div className="flex items-center gap-1.5 w-full">
-                                          <span className={`text-[10px] md:text-xs font-black text-red-400 truncate group-hover:underline`}>{sub.playerOut}</span>
-                                          {playerOutObj && <span className={`px-1 md:px-1.5 py-0.5 rounded text-[8px] font-bold shrink-0 border ${playerOutObj.points > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : playerOutObj.points < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>{playerOutObj.points} pt</span>}
-                                        </div>
-                                      </button>
-                                    </div>
-                                    <span className="text-slate-600 shrink-0 text-xs md:text-sm">➔</span>
-                                    <button onClick={() => playerInObj && setEditingPlayer({ teamId: expandedTeamId!, player: playerInObj })} className={`flex flex-col items-end min-w-0 group flex-1 cursor-pointer`}>
-                                      <span className="text-[8px] md:text-[9px] text-slate-500 font-bold uppercase tracking-wider">נכנס</span>
-                                      <div className="flex items-center gap-1.5 w-full justify-end">
-                                        {playerInObj && <span className={`px-1 md:px-1.5 py-0.5 rounded text-[8px] font-bold shrink-0 border ${playerInObj.points > 0 ? 'bg-green-500/10 text-green-400 border-green-500/20' : playerInObj.points < 0 ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>{playerInObj.points} pt</span>}
-                                        <span className={`text-[10px] md:text-xs font-black text-green-400 truncate group-hover:underline`}>{sub.playerIn}</span>
-                                      </div>
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
                     </div>
                   </div>
                 )}
@@ -1251,81 +1211,216 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       </div>
 
-      {driveModalOpen && (
-        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-center justify-center px-4 pb-[95px] md:pb-[100px] backdrop-blur-sm animate-in zoom-in-95 duration-200">
-            <div className="bg-slate-900 border border-blue-500/50 p-8 rounded-[40px] w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.15)] relative text-center">
-                <button onClick={() => setDriveModalOpen(false)} className="absolute top-6 left-6 text-slate-500 hover:text-white font-black text-xl transition-colors">✕</button>
-                <div className="w-20 h-20 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <DownloadCloud className="w-10 h-10 text-blue-500" />
-                </div>
-                <h3 className="text-2xl font-black text-white mb-2">סנכרון נתונים מאקסל</h3>
-                <p className="text-sm text-slate-400 font-bold mb-4">
-                  הדבק כאן את קישור ה-CSV של הלשונית הנוכחית מאקסל המשחק.
-                </p>
+      {/* 🟢 מודל דוח ניקוד VAR 🟢 */}
+      {auditModal && (() => {
+          const hTeam = teams.find(t => t.id === auditModal.hId);
+          const aTeam = teams.find(t => t.id === auditModal.aId);
+          const hName = TEAM_NAMES[auditModal.hId] || auditModal.hId;
+          const aName = TEAM_NAMES[auditModal.aId] || auditModal.aId;
 
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-6 text-right">
-                   <h4 className="text-sm font-black text-blue-400 mb-2">איך מוציאים את הקישור הנכון?</h4>
-                   <ol className="text-xs text-slate-300 space-y-2 pr-4 list-decimal marker:text-blue-500 font-medium">
-                      <li>באקסל, ודא שאתה נמצא על הלשונית של <b>המחזור הנוכחי</b>.</li>
-                      <li>לחץ למעלה על <b>קובץ</b> ➔ <b>שיתוף</b> ➔ <b>פרסום באינטרנט</b>.</li>
-                      <li>בחלון שייפתח, בחר בתיבה הראשונה את <b>הלשונית הספציפית</b> (לא "מסמך שלם").</li>
-                      <li>בתיבה השנייה בחר בפורמט <b>ערכים מופרדים בפסיקים (.csv)</b>.</li>
-                      <li>לחץ "פרסם", העתק את הקישור שנוצר והדבק אותו כאן למטה.</li>
-                   </ol>
-                </div>
+          const hLineup = applySubstitutionsToLineup(hTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
+          const aLineup = applySubstitutionsToLineup(aTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
 
-                <input 
-                  type="text" 
-                  value={driveUrlInput} 
-                  onChange={e => setDriveUrlInput(e.target.value)} 
-                  placeholder="https://docs.google.com/spreadsheets/..." 
-                  className="w-full bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 text-left font-mono text-sm mb-6" 
-                  dir="ltr" 
-                />
-                <button 
-                  onClick={executeFetchFromDrive} 
-                  disabled={isProcessingRound || !driveUrlInput.trim()} 
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                    {isProcessingRound ? (
-                      <><RefreshCw className="w-5 h-5 animate-spin" /> שואב נתונים...</>
-                    ) : (
-                      'סנכרן עכשיו ⚡'
-                    )}
-                </button>
+          const renderBadges = (player: any) => {
+              if (!player.stats) return <div className="mt-2 text-[10px] text-slate-500 italic">לא עודכן ניקוד (0)</div>;
+              const st = player.stats;
+              const badges = [];
+              if (st.started) badges.push({ icon: '🏃‍♂️', label: 'פתח בהרכב' });
+              if (st.played60) badges.push({ icon: '⏱️', label: '60+ דק\'' });
+              if (st.won) badges.push({ icon: '🏆', label: 'ניצחון' });
+              if (st.goals > 0) badges.push({ icon: '⚽', label: 'שער', count: st.goals });
+              if (st.assists > 0) badges.push({ icon: '👟', label: 'בישול', count: st.assists });
+              if (st.assistOwnGoal > 0) badges.push({ icon: '🎁', label: 'בישול עצמי', count: st.assistOwnGoal });
+              if (st.cleanSheet && ['GK', 'DEF', 'שוער', 'הגנה', 'בלם', 'מגן'].includes(player.position)) badges.push({ icon: '🛡️', label: 'רשת נקייה' });
+              if (st.conceded > 0) badges.push({ icon: '🥅', label: 'ספיגות', count: st.conceded });
+              if (st.yellow) badges.push({ icon: '🟨', label: 'צהוב' });
+              if (st.secondYellow) badges.push({ icon: '🟨🟥', label: 'צהוב שני' });
+              if (st.red) badges.push({ icon: '🟥', label: 'אדום' });
+              if (st.penaltyWon > 0) badges.push({ icon: '🎯', label: 'סחט פנדל', count: st.penaltyWon });
+              if (st.penaltyMissed > 0) badges.push({ icon: '⚠️', label: 'החמצת פנדל', count: st.penaltyMissed });
+              if (st.penaltySaved > 0) badges.push({ icon: '🧤', label: 'עצירת פנדל', count: st.penaltySaved });
+              if (st.ownGoals > 0) badges.push({ icon: '🤦', label: 'עצמי', count: st.ownGoals });
+
+              if (badges.length === 0 && (Number(player.points) === 0 || !player.points)) {
+                  return <div className="mt-2 text-[10px] text-slate-500 italic">לא שיחק / טרם צבר נקודות</div>;
+              }
+
+              return (
+                  <div className="flex flex-wrap gap-1.5 mt-2 pointer-events-none">
+                      {badges.map((b, i) => (
+                          <div key={i} className="group/badge relative flex items-center justify-center bg-slate-900 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 transition-colors">
+                              <span>{b.icon}</span>
+                              {b.count && b.count > 1 && <span className="ml-1 text-white font-bold">{b.count}</span>}
+                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] font-bold px-2 py-1 rounded opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible group-active/badge:opacity-100 group-active/badge:visible whitespace-nowrap z-50 border border-slate-700 shadow-xl">
+                                  {b.label}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              );
+          };
+
+          const renderPlayerRow = (p: any, fTeamName?: string, realTeamId?: string) => {
+              const isEditable = isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(fTeamName || ''));
+              
+              return (
+                  <button 
+                      key={p.id} 
+                      onClick={() => {
+                          if (isEditable) {
+                              setAuditModal(null); 
+                              setEditingPlayer({ teamId: realTeamId || (fTeamName === hName ? auditModal.hId : auditModal.aId), player: p }); 
+                          }
+                      }}
+                      className={`w-full text-right bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col mb-2 transition-colors group ${isEditable ? 'hover:bg-slate-800 cursor-pointer hover:border-blue-500/50' : 'cursor-default'}`}
+                  >
+                      <div className="flex justify-between items-start w-full">
+                          <div className="flex flex-col">
+                              <span className={`text-sm font-black text-white transition-colors ${isEditable ? 'group-hover:text-blue-400' : ''}`}>{p.name}</span>
+                              <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5">
+                                  <span>{p.position}</span>
+                                  <span>•</span>
+                                  <span>{p.team}</span>
+                                  {fTeamName && <><span>•</span><span className="text-blue-400">{fTeamName}</span></>}
+                              </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                              {isEditable && <Edit3 className="w-4 h-4 text-slate-600 group-hover:text-blue-400 transition-colors" />}
+                              <div className="flex flex-col items-center bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">
+                                  <span className={`text-lg font-black leading-none mt-0.5 ${p.points > 0 ? 'text-green-400' : p.points < 0 ? 'text-red-400' : 'text-slate-300'}`}>{p.points || 0}</span>
+                                  <span className="text-[8px] text-slate-500 uppercase mt-1">PTS</span>
+                              </div>
+                          </div>
+                      </div>
+                      {renderBadges(p)}
+                  </button>
+              );
+          };
+
+          const allPlayers = [
+              ...hLineup.map((p:any) => ({...p, fTeam: hName, realTeamId: auditModal.hId})),
+              ...aLineup.map((p:any) => ({...p, fTeam: aName, realTeamId: auditModal.aId}))
+          ];
+          
+          const grouped: Record<string, any[]> = {};
+          allPlayers.forEach(p => {
+              const rt = p.team || 'אחר';
+              if (!grouped[rt]) grouped[rt] = [];
+              grouped[rt].push(p);
+          });
+          const groupedKeys = Object.keys(grouped).sort();
+
+          return (
+            <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
+               <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-4xl h-[85vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
+                  
+                  <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
+                     <div className="flex justify-between items-start mb-4 w-full">
+                         <h3 className="text-xl font-black text-white flex items-center gap-2">📊 דוח ניקוד VAR</h3>
+                         <button onClick={() => setAuditModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
+                            <X className="w-5 h-5" />
+                         </button>
+                     </div>
+                     
+                     <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs text-slate-400 bg-black/40 p-2 rounded-xl border border-slate-800">
+                         <span className="font-black text-slate-300 mr-1">מקרא תגיות:</span>
+                         <span title="פתח בהרכב">🏃‍♂️ הרכב</span>
+                         <span title="שיחק 60 דק'">⏱️ 60 דק'</span>
+                         <span title="שער">⚽ גול</span>
+                         <span title="בישול">👟 בישול</span>
+                         <span title="סחט פנדל">🎯 סחט פנדל</span>
+                         <span title="החמיץ פנדל">⚠️ החמיץ פנדל</span>
+                         <span title="בישול עצמי">🎁 בישול עצמי</span>
+                         <span title="רשת נקייה">🛡️ רשת נקייה</span>
+                     </div>
+
+                     <div className="mt-4 flex justify-center">
+                         <button onClick={() => setAuditGroupByReal(!auditGroupByReal)} className={`text-xs font-black px-4 py-2 rounded-full border transition-all ${auditGroupByReal ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}`}>
+                             {auditGroupByReal ? 'מסודר לפי קבוצות פנטזי' : 'קבץ לפי קבוצות במציאות 🔄'}
+                         </button>
+                     </div>
+                  </div>
+
+                  <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
+                     {auditGroupByReal ? (
+                         <div className="space-y-6">
+                             {groupedKeys.map(rt => (
+                                 <div key={rt} className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                     <h4 className="text-lg font-black text-blue-400 mb-3 border-b border-slate-800 pb-2">{rt}</h4>
+                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                         {grouped[rt].sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => renderPlayerRow(p, p.fTeam, p.realTeamId))}
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     ) : (
+                         <>
+                             {/* טאבים במובייל */}
+                             <div className="flex sm:hidden mb-4 bg-slate-900 rounded-xl p-1 border border-slate-800">
+                                 <button onClick={() => setAuditActiveTab('h')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'h' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{hName}</button>
+                                 <button onClick={() => setAuditActiveTab('a')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'a' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{aName}</button>
+                             </div>
+                             
+                             {/* גריד שמופיע כולו ב-PC ומסתיר עמודה במובייל */}
+                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                 <div className={`${auditActiveTab === 'h' ? 'block' : 'hidden'} sm:block`}>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
+                                         <span className="text-lg font-black text-white">{hName}</span>
+                                     </div>
+                                     <div className="space-y-2">
+                                         {hLineup.map((p:any) => renderPlayerRow(p, hName, auditModal.hId))}
+                                     </div>
+                                 </div>
+                                 <div className={`${auditActiveTab === 'a' ? 'block' : 'hidden'} sm:block`}>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
+                                         <span className="text-lg font-black text-white">{aName}</span>
+                                     </div>
+                                     <div className="space-y-2">
+                                         {aLineup.map((p:any) => renderPlayerRow(p, aName, auditModal.aId))}
+                                     </div>
+                                 </div>
+                             </div>
+                         </>
+                     )}
+                  </div>
+               </div>
             </div>
-        </div>
-      )}
+          );
+      })()}
 
+      {/* 🟢 מודל (חלון צף) לעריכת פריטי משחק בשחקן (הקיים - עודכן עם ה-X) 🟢 */}
       {editingPlayer && (
         <div className="fixed inset-0 z-[9999] flex flex-col justify-end sm:justify-center items-center pt-10 px-0 sm:px-4 pb-[95px] sm:pb-[100px] pointer-events-none">
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md pointer-events-auto animate-in fade-in duration-300" onClick={() => setEditingPlayer(null)}></div>
           
           <div className="relative w-full max-w-lg bg-slate-900 rounded-t-[32px] sm:rounded-[32px] border-t sm:border border-slate-700/50 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col pointer-events-auto overflow-hidden animate-in slide-in-from-bottom-10 duration-300 max-h-[80vh] sm:max-h-[calc(100vh-140px)]">
             
-            <div className="flex-none p-5 pt-8 sm:pt-5 md:p-6 border-b border-slate-800 bg-slate-950/50 flex justify-between items-center relative z-20 shadow-sm">
+            <div className="flex-none p-5 pt-5 md:p-6 border-b border-slate-800 bg-slate-950/50 flex justify-between items-start relative z-20 shadow-sm w-full gap-4">
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-800 rounded-full sm:hidden"></div>
-              <button onClick={() => setEditingPlayer(null)} className="absolute top-4 left-4 md:top-6 md:left-6 w-9 h-9 md:w-11 md:h-11 bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white rounded-full flex items-center justify-center transition-all active:scale-95 shadow-md border border-slate-700 z-50">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-
-              <div className="flex items-center gap-4 mt-2 sm:mt-0">
-                <div className="w-12 h-12 md:w-14 md:h-14 relative">
-                   <Jersey primary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').prim} secondary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').sec} textColor={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').text} text={['GK', 'שוער'].includes(editingPlayer.player.position) ? '🧤' : editingPlayer.player.position} />
-                </div>
-                <div>
-                  <h3 className="text-xl md:text-2xl font-black text-white leading-tight mb-1">{editingPlayer.player.name}</h3>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{editingPlayer.player.position}</span>
-                    <span className="text-slate-700">•</span>
-                    <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">{TEAM_NAMES[editingPlayer.teamId] || editingPlayer.teamId}</span>
+              
+              <div className="flex justify-between items-center w-full">
+                  <div className="flex items-center gap-4 mt-2 sm:mt-0">
+                    <div className="w-12 h-12 md:w-14 md:h-14 relative shrink-0">
+                       <Jersey primary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').prim} secondary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').sec} textColor={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').text} text={['GK', 'שוער'].includes(editingPlayer.player.position) ? '🧤' : editingPlayer.player.position} />
+                    </div>
+                    <div className="flex flex-col">
+                      <h3 className="text-xl md:text-2xl font-black text-white leading-tight mb-1">{editingPlayer.player.name}</h3>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{editingPlayer.player.position}</span>
+                        <span className="text-slate-700">•</span>
+                        <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">{TEAM_NAMES[editingPlayer.teamId] || editingPlayer.teamId}</span>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-              <div className="text-center bg-slate-900 px-4 md:px-5 py-2 md:py-2.5 rounded-2xl border border-slate-800 shadow-inner ml-10 md:ml-14 relative group">
-                <div className="text-2xl md:text-3xl font-black text-green-400 tabular-nums leading-none">{currentDisplayPoints}</div>
-                <div className="text-[8px] md:text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-1">Points</div>
-                <button onClick={resetPlayerStats} className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-400 hover:text-white px-2 py-0.5 rounded text-[10px] font-bold border border-slate-700 shadow-md transition-colors">איפוס</button>
+                  
+                  <div className="flex gap-3 items-center">
+                      <div className="text-center bg-slate-900 px-4 md:px-5 py-2 md:py-2.5 rounded-2xl border border-slate-800 shadow-inner relative group">
+                        <div className="text-2xl md:text-3xl font-black text-green-400 tabular-nums leading-none">{currentDisplayPoints}</div>
+                        <div className="text-[8px] md:text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-1">Points</div>
+                        <button onClick={resetPlayerStats} className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-400 hover:text-white px-2 py-0.5 rounded text-[10px] font-bold border border-slate-700 shadow-md transition-colors">איפוס</button>
+                      </div>
+                      <button onClick={() => setEditingPlayer(null)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-all active:scale-95 shadow-md border border-slate-700"><X className="w-5 h-5"/></button>
+                  </div>
               </div>
             </div>
 
@@ -1398,7 +1493,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       )}
 
-      {/* --- המודל שקופץ שמציג את היסטוריית הראש-בראש --- */}
+      {/* 🟢 מודל: היסטוריית הראש-בראש 🟢 */}
       {h2hModal && (() => {
         const h2hData = getH2HData(h2hModal.hId, h2hModal.aId);
         const t1Name = TEAM_NAMES[h2hModal.hId] || h2hModal.hId;
@@ -1407,15 +1502,16 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         return (
           <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setH2hModal(null)}>
             <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-md h-[80vh] md:h-auto md:max-h-[calc(100vh-140px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
-              <div className="bg-slate-900 p-5 sm:p-6 border-b border-slate-800 text-center relative shrink-0">
-                <button onClick={() => setH2hModal(null)} className="absolute top-1/2 -translate-y-1/2 right-4 z-[5000] w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-2xl">
-                  <X className="w-5 h-5" />
-                </button>
-                <div className="flex justify-center items-center gap-4 px-10">
-                  <span className="text-lg font-black text-white truncate">{t1Name}</span>
-                  <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest border border-red-500/30 shrink-0">VS</span>
-                  <span className="text-lg font-black text-white truncate">{t2Name}</span>
-                </div>
+              
+              <div className="flex justify-between items-start bg-slate-900 p-5 sm:p-6 border-b border-slate-800 shrink-0 w-full">
+                  <div className="flex justify-center items-center gap-4 flex-1">
+                      <span className="text-lg font-black text-white truncate">{t1Name}</span>
+                      <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest border border-red-500/30 shrink-0">VS</span>
+                      <span className="text-lg font-black text-white truncate">{t2Name}</span>
+                  </div>
+                  <button onClick={() => setH2hModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-2xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
+                      <X className="w-5 h-5" />
+                  </button>
               </div>
 
               <div className="p-4 sm:p-6 flex-1 overflow-y-auto custom-scrollbar space-y-6">
@@ -1454,168 +1550,69 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         );
       })()}
 
-      {/* 🟢 המודל החדש של דוח ה-VAR 🟢 */}
-      {auditModal && (() => {
-          const hTeam = teams.find(t => t.id === auditModal.hId);
-          const aTeam = teams.find(t => t.id === auditModal.aId);
-          const hName = TEAM_NAMES[auditModal.hId] || auditModal.hId;
-          const aName = TEAM_NAMES[auditModal.aId] || auditModal.aId;
+      {/* 🟢 מודל: משיכה מדרייב 🟢 */}
+      {driveModalOpen && (
+        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-start md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
+            <div className="bg-slate-900 border border-blue-500/50 rounded-t-[40px] md:rounded-[40px] p-6 md:p-8 w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.15)] relative text-center max-h-[85vh] overflow-y-auto custom-scrollbar">
+                
+                <div className="flex justify-between items-start w-full mb-6 pb-4 border-b border-slate-800 shrink-0">
+                   <h3 className="text-2xl font-black text-white flex items-center gap-2">סנכרון נתונים מאקסל</h3>
+                   <button onClick={() => setDriveModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black shrink-0"><X className="w-5 h-5"/></button>
+                </div>
 
-          const hLineup = applySubstitutionsToLineup(hTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
-          const aLineup = applySubstitutionsToLineup(aTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
+                <div className="w-16 h-16 md:w-20 md:h-20 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6 shrink-0">
+                  <DownloadCloud className="w-8 h-8 md:w-10 md:h-10 text-blue-500" />
+                </div>
+                
+                <p className="text-sm text-slate-400 font-bold mb-4">
+                  הדבק כאן את קישור ה-CSV של הלשונית הנוכחית מאקסל המשחק.
+                </p>
 
-          const renderBadges = (player: any) => {
-              if (!player.stats) return <div className="mt-2 text-[10px] text-slate-500 italic">לא עודכן ניקוד (0)</div>;
-              const st = player.stats;
-              const badges = [];
-              if (st.started) badges.push({ icon: '🏃‍♂️', label: 'פתח בהרכב' });
-              if (st.played60) badges.push({ icon: '⏱️', label: '60+ דק\'' });
-              if (st.won) badges.push({ icon: '🏆', label: 'ניצחון' });
-              if (st.goals > 0) badges.push({ icon: '⚽', label: 'שער', count: st.goals });
-              if (st.assists > 0) badges.push({ icon: '👟', label: 'בישול', count: st.assists });
-              if (st.cleanSheet && ['GK', 'DEF', 'שוער', 'הגנה', 'בלם', 'מגן'].includes(player.position)) badges.push({ icon: '🛡️', label: 'רשת נקייה' });
-              if (st.conceded > 0) badges.push({ icon: '🥅', label: 'ספיגות', count: st.conceded });
-              if (st.yellow) badges.push({ icon: '🟨', label: 'צהוב' });
-              if (st.secondYellow) badges.push({ icon: '🟨🟥', label: 'צהוב שני' });
-              if (st.red) badges.push({ icon: '🟥', label: 'אדום' });
-              if (st.penaltyMissed > 0) badges.push({ icon: '⚠️', label: 'החמצת פנדל', count: st.penaltyMissed });
-              if (st.penaltySaved > 0) badges.push({ icon: '🧤', label: 'עצירת פנדל', count: st.penaltySaved });
-              if (st.penaltyWon > 0) badges.push({ icon: '🎯', label: 'סחט פנדל', count: st.penaltyWon });
-              if (st.ownGoals > 0) badges.push({ icon: '🤦', label: 'עצמי', count: st.ownGoals });
+                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-6 text-right">
+                   <h4 className="text-sm font-black text-blue-400 mb-2">איך מוציאים את הקישור הנכון?</h4>
+                   <ol className="text-xs text-slate-300 space-y-2 pr-4 list-decimal marker:text-blue-500 font-medium">
+                      <li>באקסל, ודא שאתה נמצא על הלשונית של <b>המחזור הנוכחי</b>.</li>
+                      <li>לחץ למעלה על <b>קובץ</b> ➔ <b>שיתוף</b> ➔ <b>פרסום באינטרנט</b>.</li>
+                      <li>בחלון שייפתח, בחר בתיבה הראשונה את <b>הלשונית הספציפית</b> (לא "מסמך שלם").</li>
+                      <li>בתיבה השנייה בחר בפורמט <b>ערכים מופרדים בפסיקים (.csv)</b>.</li>
+                      <li>לחץ "פרסם", העתק את הקישור שנוצר והדבק אותו כאן למטה.</li>
+                   </ol>
+                </div>
 
-              if (badges.length === 0 && (Number(player.points) === 0 || !player.points)) {
-                  return <div className="mt-2 text-[10px] text-slate-500 italic">לא שיחק / טרם צבר נקודות</div>;
-              }
-
-              return (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                      {badges.map((b, i) => (
-                          <div key={i} className="group/badge relative flex items-center justify-center bg-slate-900 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 cursor-help transition-colors hover:border-slate-500">
-                              <span>{b.icon}</span>
-                              {b.count && b.count > 1 && <span className="ml-1 text-white font-bold">{b.count}</span>}
-                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] font-bold px-2 py-1 rounded opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible whitespace-nowrap z-50 border border-slate-700 pointer-events-none shadow-xl">
-                                  {b.label}
-                              </div>
-                          </div>
-                      ))}
-                  </div>
-              );
-          };
-
-          const renderPlayerRow = (p: any, fTeamName?: string) => (
-              <div key={p.id} className="bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col mb-2 hover:bg-slate-800/80 transition-colors">
-                  <div className="flex justify-between items-start">
-                      <div className="flex flex-col">
-                          <span className="text-sm font-black text-white">{p.name}</span>
-                          <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5">
-                              <span>{p.position}</span>
-                              <span>•</span>
-                              <span>{p.team}</span>
-                              {fTeamName && <><span>•</span><span className="text-blue-400">{fTeamName}</span></>}
-                          </div>
-                      </div>
-                      <div className="flex flex-col items-center bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">
-                          <span className={`text-lg font-black leading-none mt-0.5 ${p.points > 0 ? 'text-green-400' : p.points < 0 ? 'text-red-400' : 'text-slate-300'}`}>{p.points || 0}</span>
-                          <span className="text-[8px] text-slate-500 uppercase mt-1">PTS</span>
-                      </div>
-                  </div>
-                  {renderBadges(p)}
-              </div>
-          );
-
-          const allPlayers = [
-              ...hLineup.map((p:any) => ({...p, fTeam: hName})),
-              ...aLineup.map((p:any) => ({...p, fTeam: aName}))
-          ];
-          
-          const grouped: Record<string, any[]> = {};
-          allPlayers.forEach(p => {
-              const rt = p.team || 'אחר';
-              if (!grouped[rt]) grouped[rt] = [];
-              grouped[rt].push(p);
-          });
-          const groupedKeys = Object.keys(grouped).sort();
-
-          return (
-            <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
-               <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-4xl h-[85vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
-                  
-                  <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
-                     <button onClick={() => setAuditModal(null)} className="absolute top-1/2 -translate-y-1/2 right-4 z-[5000] w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-2xl transition-colors hover:bg-slate-700">
-                        <X className="w-5 h-5" />
-                     </button>
-                     <h3 className="text-xl font-black text-white text-center pr-10 pl-10 truncate">דוח ניקוד VAR 🔍</h3>
-                     
-                     <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs text-slate-400 bg-black/40 p-2 rounded-xl border border-slate-800">
-                         <span className="font-black text-slate-300 mr-1">מקרא תגיות:</span>
-                         <span title="פתח בהרכב">🏃‍♂️ הרכב</span>
-                         <span title="שיחק 60 דק'">⏱️ 60 דק'</span>
-                         <span title="שער">⚽ גול</span>
-                         <span title="בישול">👟 בישול</span>
-                         <span title="רשת נקייה">🛡️ רשת נקייה</span>
-                         <span title="ספיגות">🥅 ספיגות</span>
-                         <span title="כרטיסים">🟨/🟥 כרטיס</span>
-                     </div>
-
-                     <div className="mt-4 flex justify-center">
-                         <button onClick={() => setAuditGroupByReal(!auditGroupByReal)} className={`text-xs font-black px-4 py-2 rounded-full border transition-all ${auditGroupByReal ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}`}>
-                             {auditGroupByReal ? 'מסודר לפי קבוצות פנטזי' : 'קבץ לפי קבוצות במציאות 🔄'}
-                         </button>
-                     </div>
-                  </div>
-
-                  <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
-                     {auditGroupByReal ? (
-                         <div className="space-y-6">
-                             {groupedKeys.map(rt => (
-                                 <div key={rt} className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
-                                     <h4 className="text-lg font-black text-blue-400 mb-3 border-b border-slate-800 pb-2">{rt}</h4>
-                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                         {grouped[rt].sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => renderPlayerRow(p, p.fTeam))}
-                                     </div>
-                                 </div>
-                             ))}
-                         </div>
-                     ) : (
-                         <>
-                             {/* טאבים במובייל */}
-                             <div className="flex sm:hidden mb-4 bg-slate-900 rounded-xl p-1 border border-slate-800">
-                                 <button onClick={() => setAuditActiveTab('h')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'h' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{hName}</button>
-                                 <button onClick={() => setAuditActiveTab('a')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'a' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{aName}</button>
-                             </div>
-                             
-                             {/* גריד שמופיע כולו ב-PC ומסתיר עמודה במובייל */}
-                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                                 <div className={`${auditActiveTab === 'h' ? 'block' : 'hidden'} sm:block`}>
-                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
-                                         <span className="text-lg font-black text-white">{hName}</span>
-                                     </div>
-                                     <div className="space-y-2">
-                                         {hLineup.map((p:any) => renderPlayerRow(p))}
-                                     </div>
-                                 </div>
-                                 <div className={`${auditActiveTab === 'a' ? 'block' : 'hidden'} sm:block`}>
-                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
-                                         <span className="text-lg font-black text-white">{aName}</span>
-                                     </div>
-                                     <div className="space-y-2">
-                                         {aLineup.map((p:any) => renderPlayerRow(p))}
-                                     </div>
-                                 </div>
-                             </div>
-                         </>
-                     )}
-                  </div>
-
-               </div>
+                <input 
+                  type="text" 
+                  value={driveUrlInput} 
+                  onChange={e => setDriveUrlInput(e.target.value)} 
+                  placeholder="https://docs.google.com/spreadsheets/..." 
+                  className="w-full bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 text-left font-mono text-sm mb-6 shrink-0" 
+                  dir="ltr" 
+                />
+                <button 
+                  onClick={executeFetchFromDrive} 
+                  disabled={isProcessingRound || !driveUrlInput.trim()} 
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
+                >
+                    {isProcessingRound ? (
+                      <><RefreshCw className="w-5 h-5 animate-spin" /> שואב נתונים...</>
+                    ) : (
+                      'סנכרן עכשיו ⚡'
+                    )}
+                </button>
             </div>
-          );
-      })()}
+        </div>
+      )}
 
+      {/* 🟢 מודלים לאיפוס / סגירת מחזור 🟢 */}
       {confirmCloseModalOpen && (
-        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-center justify-center px-4 pb-[95px] md:pb-[100px] backdrop-blur-sm animate-in zoom-in-95 duration-200">
-          <div className="bg-slate-900 border border-red-500/50 p-8 rounded-[40px] w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(239,68,68,0.15)] relative text-center">
-            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-start md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
+          <div className="bg-slate-900 border border-red-500/50 p-8 rounded-t-[40px] md:rounded-[40px] w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(239,68,68,0.15)] relative text-center mt-auto md:mt-0">
+            
+            <div className="flex justify-between items-start w-full mb-6 absolute top-6 right-6 left-6 pointer-events-none">
+               <div className="w-10"></div>
+               <button onClick={() => setConfirmCloseModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black pointer-events-auto"><X className="w-5 h-5"/></button>
+            </div>
+
+            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 mt-4">
               <Flame className="w-10 h-10 text-red-500" />
             </div>
             <h3 className="text-2xl font-black text-white mb-2">סגירת מחזור {currentRound}</h3>
@@ -1625,9 +1622,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             <div className="flex gap-3">
               <button onClick={executeCloseRound} disabled={isProcessingRound} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 flex justify-center items-center">
                 {isProcessingRound ? 'מעבד...' : 'כן, סגור מחזור! 🔒'}
-              </button>
-              <button onClick={() => setConfirmCloseModalOpen(false)} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold py-4 rounded-2xl transition-all text-lg active:scale-95">
-                ביטול
               </button>
             </div>
           </div>
