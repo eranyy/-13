@@ -10,39 +10,69 @@ const getApiKey = (providedKey?: string) => {
          GEMINI_API_KEY;
 };
 
+// 🟢 פונקציית עזר ליצירת Timeout כדי שהאפליקציה לא תיתקע לנצח 🟢
+const fetchWithTimeout = async (promise: Promise<any>, timeoutMs: number = 20000) => {
+    let timer: NodeJS.Timeout;
+    const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timeout: The request took longer than ${timeoutMs / 1000} seconds`)), timeoutMs);
+    });
+
+    try {
+        const result = await Promise.race([promise, timeoutPromise]);
+        clearTimeout(timer!);
+        return result;
+    } catch (e) {
+        clearTimeout(timer!);
+        throw e;
+    }
+};
+
 export const analyzeMatchImage = async (base64Data: string, mimeType: string, hint?: string, apiKey?: string) => {
   const activeKey = getApiKey(apiKey);
   const ai = new GoogleGenAI({ apiKey: activeKey });
   
-  const prompt = `אתה מומחה לחילוץ נתונים מלוחות משחקי כדורגל.
+  const prompt = `אתה סוכן AI מומחה ופדנט לחילוץ נתונים מטבלאות ספורט מורכבות ומסמכי PDF רשמיים.
 אני מספק לך תמונה או קובץ PDF של משחקי ליגת העל בכדורגל (ישראל). 
-רמז למחזור: "${hint || 'לא ידוע'}".
+רמז למחזור שצריך לחלץ: "${hint || 'לא ידוע'}".
 
-המשימה שלך היא לחלץ את המשחקים ולהחזיר אותם אך ורק כמערך JSON.
-אל תחזיר שום טקסט אחר (בלי הערות, בלי פתיח).
+המשימה שלך היא לחלץ את המשחקים ולהחזיר אותם אך ורק כמערך JSON חוקי.
+
+🚨 חוקי ברזל לסריקה מושלמת (קריטי להצלחת המשימה!) 🚨:
+1. **סרוק את כל המסמך ביסודיות, שורה אחר שורה, מההתחלה ועד הסוף!** אל תעצור עד שסיימת לקרוא הכל.
+2. חפש את המספר שניתן לך ברמז (למשל מחזור 28, 30, 32 או 33).
+3. **שים לב לפלייאוף!** המחזור יכול להיות מפוצל ל"פלייאוף עליון" ו"פלייאוף תחתון". אם ביקשתי מחזור מסוים, עליך למצוא ולחלץ את *כל* המשחקים של אותו מחזור משני הפלייאופים יחד!
+4. אל תניח שיש מספר קבוע של משחקים. יכולים להיות 3, 4, 6 או 7 משחקים. חלץ את כולם.
+5. קרא בעיון כל טבלה. לפעמים שמות הקבוצות או התאריכים נשברים לשורות נפרדות. חבר אותם למשחק אחד.
+6. השעה של המשחק היא קריטית! חלץ אותה במדויק.
+
+החזר אך ורק מערך JSON, ללא שום טקסט או הסבר נוסף (ללא פורמט Markdown כמו \`\`\`json).
 
 כל אובייקט במערך חייב לכלול בדיוק את המפתחות הבאים:
-- "round": (מספר שלם לפי הרמז שסיפקתי. נחש אם חסר).
+- "round": (מספר שלם לפי הרמז שסיפקתי).
 - "homeTeam": (מחרוזת) שם קבוצת הבית בעברית.
 - "awayTeam": (מחרוזת) שם קבוצת החוץ בעברית.
-- "date": (מחרוזת) תאריך המשחק.
-- "time": (מחרוזת) שעת המשחק המדויקת בפורמט HH:MM בלבד (למשל "20:00" או "19:30"). אל תוסיף מילים כמו "שעה" או "PM". זה קריטי!
-- "stadium": (מחרוזת) חלץ את שם המגרש/אצטדיון בעברית אם הוא מופיע ליד המשחק (למשל "בלומפילד", "סמי עופר", "הי״א", "טדי", "טרנר"). אם לא מופיע מגרש, החזר מחרוזת ריקה "".
-- "tvChannel": (מחרוזת) ערוץ שידור אם יש, אחרת מחרוזת ריקה.`;
+- "date": (מחרוזת) תאריך המשחק (למשל 19.04 או 19/04). 
+- "time": (מחרוזת) שעת המשחק המדויקת בפורמט HH:MM בלבד (למשל "20:00"). ללא מילים נוספות!
+- "stadium": (מחרוזת) חלץ את שם המגרש/אצטדיון בעברית (למשל "סמי עופר", "בלומפילד", "דוחא", "טרנר", "שלמה ביטוח"). אם לא מופיע, החזר "".
+- "tvChannel": (מחרוזת) ערוץ שידור אם יש, אחרת "".`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", 
+    console.log("Sending request to Gemini model: gemini-1.5-flash...");
+    const requestPromise = ai.models.generateContent({
+      model: "gemini-1.5-flash",
       contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Data } }] }]
     });
+
+    const response = await fetchWithTimeout(requestPromise, 25000); // 25 שניות גג
 
     const text = response.text;
     if (!text) throw new Error("No response from Gemini AI");
 
-    const cleanJsonText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const cleanJsonText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+    console.log("Successfully extracted data:", cleanJsonText);
     return JSON.parse(cleanJsonText);
   } catch (error: any) {
-    console.error("Gemini AI Error:", error);
+    console.error("Gemini AI Image Analysis Error:", error);
     throw new Error(error.message || "Failed to analyze image with Gemini AI");
   }
 };
@@ -51,10 +81,9 @@ export const generateAISummary = async (fixtures: any[], teams: any[], apiKey?: 
     const activeKey = getApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: activeKey });
 
-    // 🟢 מכינים ל-AI את הטבלה בצורה של טקסט ממוספר ופשוט כדי שלא ימציא 🟢
     const sortedTeams = [...teams].filter(t => t.id !== 'admin' && t.id !== 'system').sort((a, b) => {
         const aPts = a.points || 0; const bPts = b.points || 0;
-        if (bPts !== aPts) return bPts - aPts; // מיון יורד
+        if (bPts !== aPts) return bPts - aPts;
         return ((b.gf || 0) - (b.ga || 0)) - ((a.gf || 0) - (a.ga || 0));
     });
 
@@ -81,15 +110,20 @@ ${fixturesText}
 
 הסיכום צריך לכלול כותרת מפוצצת, התייחסות למובילת הטבלה, וסלנג כדורגל ישראלי. החזר בפורמט Markdown.`;
 
-    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
-    return response.text || "";
+    try {
+        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
+        const response = await fetchWithTimeout(requestPromise, 15000);
+        return response.text || "";
+    } catch (e) {
+        console.error("Summary generation failed:", e);
+        throw e;
+    }
 };
 
 export const generateRumors = async (teams: any[], apiKey?: string) => {
     const activeKey = getApiKey(apiKey);
     const ai = new GoogleGenAI({ apiKey: activeKey });
 
-    // 🟢 מכינים ל-AI רשימת שחקנים מסודרת לכל קבוצה, כדי שלא יעביר שחקנים מקבוצה לקבוצה בטעות 🟢
     const teamsWithPlayersText = teams.filter(t => t.id !== 'admin' && t.id !== 'system').map(t => {
         const playersList = (t.squad || []).map((p: any) => p.name).filter(Boolean).join(', ');
         return `* קבוצת ${t.teamName} (מנג'ר: ${t.name}):\n  שחקנים בסגל: ${playersList || 'אין שחקנים כרגע'}`;
@@ -108,6 +142,12 @@ ${teamsWithPlayersText}
 
 החזר את השמועות בפורמט Markdown בצורה של מבזקי חדשות.`;
 
-    const response = await ai.models.generateContent({ model: "gemini-3-flash-preview", contents: prompt });
-    return response.text || "";
+    try {
+        const requestPromise = ai.models.generateContent({ model: "gemini-1.5-flash", contents: prompt });
+        const response = await fetchWithTimeout(requestPromise, 15000);
+        return response.text || "";
+    } catch (e) {
+        console.error("Rumors generation failed:", e);
+        throw e;
+    }
 };

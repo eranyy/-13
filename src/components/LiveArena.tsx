@@ -82,6 +82,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
   const [loading, setLoading] = useState(true);
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
   const [h2hModal, setH2hModal] = useState<{hId: string, aId: string} | null>(null);
+  
+  // 🟢 משתנים חדשים עבור דוח ה-VAR 🟢
+  const [auditModal, setAuditModal] = useState<{hId: string, aId: string} | null>(null);
+  const [auditActiveTab, setAuditActiveTab] = useState<'h' | 'a'>('h');
+  const [auditGroupByReal, setAuditGroupByReal] = useState(false);
+
   const [isProcessingRound, setIsProcessingRound] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<{teamId: string, player: any} | null>(null);
   const [stats, setStats] = useState({ 
@@ -204,7 +210,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     return currentLineup;
   };
 
-  // 🟢 פונקציית עזר לחישוב אירועי הלייב של הקבוצה (שערים, צהובים, אדומים) 🟢
   const getTeamLiveEvents = (teamId: string) => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return { goals: 0, yellows: 0, reds: 0 };
@@ -224,7 +229,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         }
     });
 
-    // כולל גם שחקנים שיצאו בחילוף מחצית (הסטטיסטיקה שלהם נחשבת לקבוצה)
     const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
     roundSubs.forEach((sub: any) => {
         const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
@@ -241,11 +245,38 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     return { goals, yellows, reds };
   };
 
+  const getUntouchedCount = (teamId: string) => {
+      const team = teams.find(t => t.id === teamId);
+      if (!team) return 0;
+      const currentLineup = applySubstitutionsToLineup(team);
+      let count = 0;
+      currentLineup.forEach((p: any) => {
+          const hasPlayed = (p.stats && Object.values(p.stats).some(v => v === true || (typeof v === 'number' && v > 0))) || (Number(p.points) !== 0);
+          if (!hasPlayed && Number(p.points) === 0) count++;
+      });
+      return count;
+  };
+
   const shareArenaAsImage = async () => {
     const el = document.getElementById('arena-capture-area');
     if (!el) return;
 
     showToast('מייצר תמונה ברמת ליגת האלופות... 📸', 'info');
+
+    let shareText = `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥\n\n`;
+    const currentMatches = fixtures.find(r => r.round === currentRound)?.matches || [];
+    
+    currentMatches.forEach((match: any) => {
+        const hScore = calculateTeamScore(match.h);
+        const aScore = calculateTeamScore(match.a);
+        const hName = TEAM_NAMES[match.h] || match.h;
+        const aName = TEAM_NAMES[match.a] || match.a;
+        const hUntouched = getUntouchedCount(match.h);
+        const aUntouched = getUntouchedCount(match.a);
+        
+        shareText += `⚽ ${hName} (${hScore}) - (${aScore}) ${aName}\n`;
+        shareText += `⏱️ בקנה: ${hName} (${hUntouched}) | ${aName} (${aUntouched})\n\n`;
+    });
 
     try {
       const canvas = await html2canvas(el, { 
@@ -279,19 +310,27 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           await navigator.share({
             files: [file],
             title: `תוצאות זירה - מחזור ${currentRound}`,
-            text: `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥`
+            text: shareText.trim()
           });
           setAppAlert(null);
         } else {
           try {
-            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-            showToast('התמונה הועתקה! פתח ווצאפ והדבק (Ctrl+V) 📋', 'success');
-          } catch (err) {
+            const textArea = document.createElement("textarea");
+            textArea.value = shareText.trim();
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand("copy");
+            document.body.removeChild(textArea);
+            
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = `Arena_Round_${currentRound}.png`;
             link.click();
-            showToast('התמונה ירדה למחשב! צרף אותה לווצאפ 📥', 'success');
+            
+            showToast('התמונה ירדה! הטקסט הועתק, הדבק (Ctrl+V) ב-WhatsApp Web 📋', 'success');
+          } catch (err) {
+            console.error(err);
+            showToast('שגיאה בשיתוף', 'error');
           }
         }
       }, 'image/png');
@@ -1005,9 +1044,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             const aScore = calculateTeamScore(match.a);
             const isExpanded = expandedTeamId === match.h || expandedTeamId === match.a;
             
-            // 🟢 חישוב אירועי הלייב של הקבוצות 🟢
+            // חישוב אירועי הלייב והשחקנים שנותרו
             const hEvents = getTeamLiveEvents(match.h);
             const aEvents = getTeamLiveEvents(match.a);
+            const hUntouched = getUntouchedCount(match.h);
+            const aUntouched = getUntouchedCount(match.a);
             
             return (
               <div key={idx} className={`bg-slate-900/60 backdrop-blur-md rounded-[32px] border transition-all duration-300 overflow-hidden flex flex-col ${isExpanded ? 'border-slate-500 shadow-[0_0_30px_rgba(255,255,255,0.05)]' : 'border-slate-800 shadow-xl hover:border-slate-700'}`}>
@@ -1019,6 +1060,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     <button onClick={() => toggleTeam(match.h)} className={`flex-1 flex flex-col justify-center items-center md:items-start px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.h ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת בית</span>
                       <span className={`text-lg md:text-2xl font-black ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
+                      {/* תצוגת "שחקנים שנותרו" מתחת לשם הקבוצה */}
+                      <span className="text-[9px] md:text-[10px] text-slate-400 font-bold mt-1.5 bg-slate-900/50 px-2 py-0.5 rounded border border-slate-700/50 whitespace-nowrap">
+                        בקנה: {hUntouched} שחקנים
+                      </span>
                     </button>
 
                     {/* --- לוח התוצאות ואזור האייקונים (כרטיסים/שערים) --- */}
@@ -1056,6 +1101,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     <button onClick={() => toggleTeam(match.a)} className={`flex-1 flex flex-col justify-center items-center md:items-end px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.a ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת חוץ</span>
                       <span className={`text-lg md:text-2xl font-black ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>
+                      {/* תצוגת "שחקנים שנותרו" מתחת לשם הקבוצה */}
+                      <span className="text-[9px] md:text-[10px] text-slate-400 font-bold mt-1.5 bg-slate-900/50 px-2 py-0.5 rounded border border-slate-700/50 whitespace-nowrap">
+                        בקנה: {aUntouched} שחקנים
+                      </span>
                     </button>
 
                   </div>
@@ -1195,9 +1244,15 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                   </div>
                 )}
                 
-                <button onClick={(e) => { e.stopPropagation(); setH2hModal({hId: match.h, aId: match.a}); }} className="w-full bg-slate-900/30 py-2 border-t border-slate-800 flex justify-center items-center gap-2 text-slate-500 hover:text-white transition-colors" data-html2canvas-ignore="true">
-                   <Swords className="w-4 h-4" /><span className="text-xs font-black">H2H (ראש בראש)</span>
-                </button>
+                {/* 🟢 כאן הוספתי את הפיצול של הכפתורים - H2H ודוח הניקוד (VAR) 🟢 */}
+                <div className="flex w-full bg-slate-900/30 border-t border-slate-800" data-html2canvas-ignore="true">
+                    <button onClick={(e) => { e.stopPropagation(); setH2hModal({hId: match.h, aId: match.a}); }} className="flex-1 py-2 border-l border-slate-800 flex justify-center items-center gap-2 text-slate-500 hover:text-white hover:bg-slate-800/50 transition-colors">
+                       <Swords className="w-4 h-4" /><span className="text-xs font-black">H2H</span>
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); setAuditModal({hId: match.h, aId: match.a}); setAuditActiveTab('h'); setAuditGroupByReal(false); }} className="flex-1 py-2 flex justify-center items-center gap-2 text-slate-500 hover:text-blue-400 hover:bg-slate-800/50 transition-colors">
+                       <span className="text-base">📊</span><span className="text-xs font-black">דוח ניקוד (VAR)</span>
+                    </button>
+                </div>
 
               </div>
             );
@@ -1352,7 +1407,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       )}
 
-      {/* --- המודל שקופץ שמציג את היסטוריית הראש-בראש --- */}
       {h2hModal && (() => {
         const h2hData = getH2HData(h2hModal.hId, h2hModal.aId);
         const t1Name = TEAM_NAMES[h2hModal.hId] || h2hModal.hId;
@@ -1406,6 +1460,164 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             </div>
           </div>
         );
+      })()}
+
+      {/* 🟢 המודל החדש של דוח ה-VAR 🟢 */}
+      {auditModal && (() => {
+          const hTeam = teams.find(t => t.id === auditModal.hId);
+          const aTeam = teams.find(t => t.id === auditModal.aId);
+          const hName = TEAM_NAMES[auditModal.hId] || auditModal.hId;
+          const aName = TEAM_NAMES[auditModal.aId] || auditModal.aId;
+
+          const hLineup = applySubstitutionsToLineup(hTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
+          const aLineup = applySubstitutionsToLineup(aTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
+
+          const renderBadges = (player: any) => {
+              if (!player.stats) return <div className="mt-2 text-[10px] text-slate-500 italic">לא עודכן ניקוד (0)</div>;
+              const st = player.stats;
+              const badges = [];
+              if (st.started) badges.push({ icon: '🏃‍♂️', label: 'פתח בהרכב' });
+              if (st.played60) badges.push({ icon: '⏱️', label: '60+ דק\'' });
+              if (st.won) badges.push({ icon: '🏆', label: 'ניצחון' });
+              if (st.goals > 0) badges.push({ icon: '⚽', label: 'שער', count: st.goals });
+              if (st.assists > 0) badges.push({ icon: '👟', label: 'בישול', count: st.assists });
+              if (st.cleanSheet && ['GK', 'DEF', 'שוער', 'הגנה', 'בלם', 'מגן'].includes(player.position)) badges.push({ icon: '🛡️', label: 'רשת נקייה' });
+              if (st.conceded > 0) badges.push({ icon: '🥅', label: 'ספיגות', count: st.conceded });
+              if (st.yellow) badges.push({ icon: '🟨', label: 'צהוב' });
+              if (st.secondYellow) badges.push({ icon: '🟨🟥', label: 'צהוב שני' });
+              if (st.red) badges.push({ icon: '🟥', label: 'אדום' });
+              if (st.penaltyMissed > 0) badges.push({ icon: '⚠️', label: 'החמצת פנדל', count: st.penaltyMissed });
+              if (st.penaltySaved > 0) badges.push({ icon: '🧤', label: 'עצירת פנדל', count: st.penaltySaved });
+              if (st.penaltyWon > 0) badges.push({ icon: '🎯', label: 'סחט פנדל', count: st.penaltyWon });
+              if (st.ownGoals > 0) badges.push({ icon: '🤦', label: 'עצמי', count: st.ownGoals });
+
+              if (badges.length === 0 && (Number(player.points) === 0 || !player.points)) {
+                  return <div className="mt-2 text-[10px] text-slate-500 italic">לא שיחק / טרם צבר נקודות</div>;
+              }
+
+              return (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                      {badges.map((b, i) => (
+                          <div key={i} className="group/badge relative flex items-center justify-center bg-slate-900 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 cursor-help transition-colors hover:border-slate-500">
+                              <span>{b.icon}</span>
+                              {b.count && b.count > 1 && <span className="ml-1 text-white font-bold">{b.count}</span>}
+                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] font-bold px-2 py-1 rounded opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible whitespace-nowrap z-50 border border-slate-700 pointer-events-none shadow-xl">
+                                  {b.label}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              );
+          };
+
+          const renderPlayerRow = (p: any, fTeamName?: string) => (
+              <div key={p.id} className="bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col mb-2 hover:bg-slate-800/80 transition-colors">
+                  <div className="flex justify-between items-start">
+                      <div className="flex flex-col">
+                          <span className="text-sm font-black text-white">{p.name}</span>
+                          <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5">
+                              <span>{p.position}</span>
+                              <span>•</span>
+                              <span>{p.team}</span>
+                              {fTeamName && <><span>•</span><span className="text-blue-400">{fTeamName}</span></>}
+                          </div>
+                      </div>
+                      <div className="flex flex-col items-center bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">
+                          <span className={`text-lg font-black leading-none mt-0.5 ${p.points > 0 ? 'text-green-400' : p.points < 0 ? 'text-red-400' : 'text-slate-300'}`}>{p.points || 0}</span>
+                          <span className="text-[8px] text-slate-500 uppercase mt-1">PTS</span>
+                      </div>
+                  </div>
+                  {renderBadges(p)}
+              </div>
+          );
+
+          const allPlayers = [
+              ...hLineup.map((p:any) => ({...p, fTeam: hName})),
+              ...aLineup.map((p:any) => ({...p, fTeam: aName}))
+          ];
+          
+          const grouped: Record<string, any[]> = {};
+          allPlayers.forEach(p => {
+              const rt = p.team || 'אחר';
+              if (!grouped[rt]) grouped[rt] = [];
+              grouped[rt].push(p);
+          });
+          const groupedKeys = Object.keys(grouped).sort();
+
+          return (
+            <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
+               <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-4xl h-[85vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
+                  
+                  <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
+                     <button onClick={() => setAuditModal(null)} className="absolute top-1/2 -translate-y-1/2 right-4 z-[5000] w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-2xl transition-colors hover:bg-slate-700">
+                        <X className="w-5 h-5" />
+                     </button>
+                     <h3 className="text-xl font-black text-white text-center pr-10 pl-10 truncate">דוח ניקוד VAR 🔍</h3>
+                     
+                     <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs text-slate-400 bg-black/40 p-2 rounded-xl border border-slate-800">
+                         <span className="font-black text-slate-300 mr-1">מקרא תגיות:</span>
+                         <span title="פתח בהרכב">🏃‍♂️ הרכב</span>
+                         <span title="שיחק 60 דק'">⏱️ 60 דק'</span>
+                         <span title="שער">⚽ גול</span>
+                         <span title="בישול">👟 בישול</span>
+                         <span title="רשת נקייה">🛡️ רשת נקייה</span>
+                         <span title="ספיגות">🥅 ספיגות</span>
+                         <span title="כרטיסים">🟨/🟥 כרטיס</span>
+                     </div>
+
+                     <div className="mt-4 flex justify-center">
+                         <button onClick={() => setAuditGroupByReal(!auditGroupByReal)} className={`text-xs font-black px-4 py-2 rounded-full border transition-all ${auditGroupByReal ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}`}>
+                             {auditGroupByReal ? 'מסודר לפי קבוצות פנטזי' : 'קבץ לפי קבוצות במציאות 🔄'}
+                         </button>
+                     </div>
+                  </div>
+
+                  <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
+                     {auditGroupByReal ? (
+                         <div className="space-y-6">
+                             {groupedKeys.map(rt => (
+                                 <div key={rt} className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+                                     <h4 className="text-lg font-black text-blue-400 mb-3 border-b border-slate-800 pb-2">{rt}</h4>
+                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                         {grouped[rt].sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => renderPlayerRow(p, p.fTeam))}
+                                     </div>
+                                 </div>
+                             ))}
+                         </div>
+                     ) : (
+                         <>
+                             {/* טאבים במובייל */}
+                             <div className="flex sm:hidden mb-4 bg-slate-900 rounded-xl p-1 border border-slate-800">
+                                 <button onClick={() => setAuditActiveTab('h')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'h' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{hName}</button>
+                                 <button onClick={() => setAuditActiveTab('a')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'a' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{aName}</button>
+                             </div>
+                             
+                             {/* גריד שמופיע כולו ב-PC ומסתיר עמודה במובייל */}
+                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                 <div className={`${auditActiveTab === 'h' ? 'block' : 'hidden'} sm:block`}>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
+                                         <span className="text-lg font-black text-white">{hName}</span>
+                                     </div>
+                                     <div className="space-y-2">
+                                         {hLineup.map((p:any) => renderPlayerRow(p))}
+                                     </div>
+                                 </div>
+                                 <div className={`${auditActiveTab === 'a' ? 'block' : 'hidden'} sm:block`}>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
+                                         <span className="text-lg font-black text-white">{aName}</span>
+                                     </div>
+                                     <div className="space-y-2">
+                                         {aLineup.map((p:any) => renderPlayerRow(p))}
+                                     </div>
+                                 </div>
+                             </div>
+                         </>
+                     )}
+                  </div>
+
+               </div>
+            </div>
+          );
       })()}
 
       {confirmCloseModalOpen && (

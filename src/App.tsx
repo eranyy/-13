@@ -249,8 +249,9 @@ const App: React.FC = () => {
         {activeTab === 'cup' && <CupTab />}
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 w-full bg-[#0B1120]/90 backdrop-blur-2xl border-t border-white/5 px-2 pb-[env(safe-area-inset-bottom)] z-[100]">
-         <div className="max-w-md mx-auto flex items-center justify-between h-[84px] relative">
+      {/* 🟢 התפריט התחתון המעודכן לטובת המובייל 🟢 */}
+      <nav className="fixed bottom-0 left-0 right-0 w-full bg-[#0B1120]/95 backdrop-blur-2xl border-t border-white/5 pb-[env(safe-area-inset-bottom)] z-[100]">
+         <div className="max-w-lg mx-auto flex items-center justify-evenly h-[76px] sm:h-[84px] px-1 relative">
             {availableTabs.map(tab => {
               const isActive = activeTab === tab.id;
               const isCup = tab.id === 'cup';
@@ -259,15 +260,15 @@ const App: React.FC = () => {
                 <button 
                   key={tab.id} 
                   onClick={() => setActiveTab(tab.id as any)} 
-                  className="flex flex-col items-center justify-center w-14 h-full transition-all duration-300 outline-none group gap-1.5 pt-1"
+                  className="flex flex-1 flex-col items-center justify-center h-full transition-all duration-300 outline-none group gap-1 min-w-0"
                 >
-                  <div className={`transition-all duration-300 ${isActive ? `-translate-y-1 scale-110 ${isCup ? 'text-yellow-400' : 'text-white'}` : `text-slate-500 group-hover:-translate-y-1 group-active:scale-90 ${isCup ? 'group-hover:text-yellow-400' : 'group-hover:text-slate-300'}`}`}>
-                    {tab.icon}
+                  <div className={`transition-all duration-300 flex items-center justify-center ${isActive ? `-translate-y-1 scale-110 ${isCup ? 'text-yellow-400' : 'text-white'}` : `text-slate-500 group-hover:-translate-y-1 group-active:scale-90 ${isCup ? 'group-hover:text-yellow-400' : 'group-hover:text-slate-300'}`}`}>
+                    <div className="transform scale-90 sm:scale-100">{tab.icon}</div>
                   </div>
-                  <span className={`text-[9px] font-black uppercase tracking-wider transition-all duration-300 ${isActive ? `opacity-100 -translate-y-0.5 ${isCup ? 'text-yellow-400' : 'text-green-400'}` : `opacity-60 text-slate-400 group-hover:opacity-100 ${isCup ? 'group-hover:text-yellow-400' : 'group-hover:text-white'}`}`}>
+                  <span className={`text-[8.5px] sm:text-[9px] font-black uppercase tracking-wide truncate w-full text-center transition-all duration-300 ${isActive ? `opacity-100 -translate-y-0.5 ${isCup ? 'text-yellow-400' : 'text-green-400'}` : `opacity-60 text-slate-400 group-hover:opacity-100 ${isCup ? 'group-hover:text-yellow-400' : 'group-hover:text-white'}`}`}>
                     {tab.label}
                   </span>
-                  {isActive && <div className={`absolute bottom-1.5 w-1 h-1 rounded-full ${isCup ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)]' : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]'}`}></div>}
+                  {isActive && <div className={`absolute bottom-1 w-1 h-1 rounded-full ${isCup ? 'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)]' : 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]'}`}></div>}
                 </button>
               );
             })}

@@ -170,6 +170,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
   const displayTeams = teams.filter(t => t.teamName && t.teamName.toUpperCase() !== 'ADMIN' && t.id !== 'admin');
   
+  // הגדרות הרשאות
+  const currentRole = String(loggedInUser?.role || '');
+  const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
+
   const isMyTeam = isAdmin || (() => {
     if (!myTeam || !loggedInUser) return false;
     const uId = cleanStr(loggedInUser.id);
@@ -189,8 +193,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     );
   })();
 
-  const currentRole = String(loggedInUser?.role || '');
-  const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
+  const canEditLineup = isMyTeam || isManagerOrAdmin;
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'leagueData', 'real_fixtures'), doc => {
@@ -334,7 +337,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       isFormationValid = activeLineup.length === 11 && ALLOWED_FORMATIONS.includes(currentFormationStr) && gks === 1;
   }
 
-  // 🟢 פונקציית בדיקת המשחקים החדשה: ללא תלות בתוצאות, רק שעה ותאריך מוחלטים מהסוף להתחלה 🟢
   const checkIsMatchStarted = (playerRealTeam: string) => {
     if (globalLock && !isManagerOrAdmin) {
         return true;
@@ -441,7 +443,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleCancelSub = async (subId: string) => {
-    if (!isMyTeam || !myTeam || isCupModeActive) return; 
+    if (!canEditLineup || !myTeam || isCupModeActive) return; 
     const subToCancel = transfersLog.find(t => t.id === subId);
     if (!subToCancel) return;
 
@@ -494,7 +496,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const togglePlayerPosition = (player: Player, from: 'lineup' | 'bench') => {
-    if (!isMyTeam) return showToast('מצב צפייה בלבד. אינך יכול לערוך.', 'error');
+    if (!canEditLineup) return showToast('מצב צפייה בלבד. אינך יכול לערוך.', 'error');
     const currentActiveLineup = lineup.filter(p => p && p.id && POS_ARRAY.includes(p.position));
     const currentActiveBench = bench.filter(p => p && p.id);
 
@@ -558,7 +560,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleHalftimeSub = async () => {
-    if (!isMyTeam || !myTeam || isCupModeActive) return showToast('חילופי מחצית זמינים רק למשחקי ליגה!', 'error');
+    if (!canEditLineup || !myTeam || isCupModeActive) return showToast('חילופי מחצית זמינים רק למשחקי ליגה!', 'error');
     if (!subOutId || !subInId) return showToast('בחר שחקן יוצא ונכנס', 'error');
     
     const activeSubs = transfersLog.filter(t => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
@@ -598,6 +600,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       setLineup(newLineup); 
       setBench(newBench);
       
+      // 🟢 תוספת חתימה: מי ביצע את הפעולה אם זה מנהל 🟢
+      let actionBy = loggedInUser?.name || 'מנג\'ר';
+      if (!isMyTeam && isManagerOrAdmin) {
+          actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam.teamName}`;
+      }
+
       const subLog = { 
           id: `sub_${Date.now()}`, 
           type: 'HALFTIME_SUB', 
@@ -605,6 +613,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           playerIn: playerIn.name, 
           playerOut: playerOut.name, 
           status: 'ACTIVE',
+          actionBy: actionBy, // הוספת החתימה
           timestamp: new Date().toLocaleString('he-IL', { hour12: false }) 
       };
 
@@ -632,7 +641,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleSaveLineup = async () => {
-    if (!isMyTeam || !myTeam || !isFormationValid) return;
+    if (!canEditLineup || !myTeam || !isFormationValid) return;
     
     if (!isCupModeActive && !isPlayoffRound && activeLineup.length !== 11) return;
     
@@ -703,12 +712,19 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           updateData.lastLineupUpdate = new Date().toISOString();
           
           if (playersInNames.length > 0 || playersOutNames.length > 0) {
+              // 🟢 תוספת חתימה: מי ביצע את הפעולה אם זה מנהל 🟢
+              let actionBy = loggedInUser?.name || 'מנג\'ר';
+              if (!isMyTeam && isManagerOrAdmin) {
+                  actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam?.teamName}`;
+              }
+
               const editLog = {
                   id: `edit_${Date.now()}`,
                   type: isOverride ? 'LATE_REGULAR_EDIT' : 'REGULAR_EDIT',
                   round: currentRound,
                   playersIn: playersInNames,
                   playersOut: playersOutNames,
+                  actionBy: actionBy, // הוספת החתימה
                   timestamp: new Date().toLocaleString('he-IL', { hour12: false })
               };
               newTransfers.push(editLog);
@@ -727,7 +743,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   const handleClearPitch = () => {
-    if (!isMyTeam) return;
+    if (!canEditLineup) return;
     const allPlayers = [...lineup, ...bench];
     setLineup([]); setBench(allPlayers.sort((a, b) => (POS_ORDER[a.position] || 99) - (POS_ORDER[b.position] || 99)));
     showToast('המגרש נוקה.', 'success');
@@ -757,6 +773,12 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     let soldPlayerForLog: any = null;
     let boughtPlayerName = '';
 
+    // 🟢 תוספת חתימה גם לרכש (למרות שרק הבעלים מורשה כרגע, ליתר ביטחון/אדמין) 🟢
+    let actionBy = loggedInUser?.name || 'מנג\'ר';
+    if (!isMyTeam && isManagerOrAdmin) {
+        actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam.teamName}`;
+    }
+
     if (transferType === 'IN') {
       if (!newPlayerName.trim()) return showToast('נא להזין שם שחקן.', 'error');
       if (!isFreezeTransfer && usedTransfers >= 14) {
@@ -775,7 +797,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       updatedSquad = [...updatedSquad, newPlayer];
       updatedBench = [...bench, newPlayer].sort((a, b) => POS_ORDER[a.position] - POS_ORDER[b.position]);
       setBench(updatedBench);
-      logEntry = { id: `tr_${Date.now()}`, type: isFreezeTransfer ? 'FREEZE_IN' : 'IN', player: newPlayerName, team: newPlayerTeam, position: newPlayerPos, timestamp };
+      logEntry = { id: `tr_${Date.now()}`, type: isFreezeTransfer ? 'FREEZE_IN' : 'IN', player: newPlayerName, team: newPlayerTeam, position: newPlayerPos, actionBy, timestamp };
     } else {
       if (!playerOutId) return showToast('נא לבחר שחקן למכירה.', 'error');
       const playerToSell = updatedSquad.find(p => p.id === playerOutId);
@@ -786,7 +808,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       updatedLineup = lineup.filter(p => p.id !== playerOutId);
       updatedBench = bench.filter(p => p.id !== playerOutId).sort((a, b) => POS_ORDER[a.position] - POS_ORDER[b.position]);
       setLineup(updatedLineup); setBench(updatedBench);
-      logEntry = { id: `tr_${Date.now()}`, type: 'OUT', player: playerToSell.name, team: playerToSell.team, position: playerToSell.position, timestamp };
+      logEntry = { id: `tr_${Date.now()}`, type: 'OUT', player: playerToSell.name, team: playerToSell.team, position: playerToSell.position, actionBy, timestamp };
     }
 
     try {
@@ -935,7 +957,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {isMyTeam && (
+          {canEditLineup && (
             <button
               onClick={(e) => { e.stopPropagation(); togglePlayerPosition(player, isBench ? 'bench' : 'lineup'); }}
               className={`px-3 py-1.5 md:px-4 md:py-2 rounded-xl text-xs md:text-sm font-black border transition-all active:scale-95 flex items-center gap-1 ${isBench ? 'bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20' : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-600'}`}
@@ -950,7 +972,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 font-sans animate-in fade-in pb-32" dir="rtl">
+    <div className="max-w-6xl mx-auto space-y-6 font-sans animate-in fade-in pb-56 md:pb-32" dir="rtl">
       
       {toast && (
         <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[9999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
@@ -959,7 +981,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         </div>
       )}
 
-      {/* 🟢 באנר נעילה גלובלית 🟢 */}
       {globalLock && (
           <div className="bg-gradient-to-r from-red-600 via-red-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
               <div className="flex items-center gap-4">
@@ -972,7 +993,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           </div>
       )}
 
-      {/* 🟢 באנר פלייאוף צעקני 🟢 */}
       {isPlayoffRound && !isCupModeActive && !globalLock && (
           <div className="bg-gradient-to-r from-purple-600 via-rose-500 to-orange-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between animate-pulse">
               <div className="flex items-center gap-4">
@@ -985,7 +1005,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           </div>
       )}
 
-      {/* 🟢 באנר חלון גביע 🟢 */}
       {cupSettings.isOpen && cupSettings.activeTeams?.includes(myTeam.id) && (
           <div className="bg-gradient-to-r from-yellow-600 via-amber-500 to-orange-500 p-1 md:p-1.5 rounded-[24px] shadow-2xl flex flex-col md:flex-row items-center justify-between gap-3 relative z-50 mt-2 mb-6">
               <div className="flex items-center gap-3 px-4 py-2">
@@ -1012,7 +1031,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           </div>
       )}
 
-      {/* 🟢 חלונות התראות ואישור חריג 🟢 */}
       {appAlert && (
         <div className="fixed inset-0 z-[5000] flex items-center justify-center px-4 pb-[95px] md:pb-[100px] bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700 p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col items-center text-center">
@@ -1087,7 +1105,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           )}
 
           <div className="flex md:hidden items-center gap-2">
-            {activeTab === 'pitch' && isMyTeam && (
+            {activeTab === 'pitch' && canEditLineup && (
               <button onClick={handleClearPitch} title="נקה מגרש (הורד את כולם לספסל)" className="bg-slate-800 p-2.5 rounded-xl text-slate-400 hover:text-white transition-colors">
                 <Eraser className="w-4 h-4" />
               </button>
@@ -1101,7 +1119,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         </div>
 
         <div className="hidden md:flex items-center gap-3">
-          {activeTab === 'pitch' && isMyTeam && (
+          {activeTab === 'pitch' && canEditLineup && (
             <button onClick={handleClearPitch} title="נקה מגרש (הורד את כולם לספסל)" className="bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 px-4 py-2 rounded-xl transition-all flex items-center gap-2 active:scale-95 font-bold text-xs shadow-md">
               <Eraser className="w-4 h-4" /> נקה מגרש
             </button>
@@ -1135,10 +1153,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         </button>
       </div>
 
-      {!isMyTeam && (
+      {!canEditLineup && activeTab === 'pitch' && (
         <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl text-center flex justify-center items-center gap-2 backdrop-blur-sm">
           <span className="text-xl">👀</span>
-          <span className="text-red-400 text-xs font-black tracking-wide">מצב צפייה. אינך מנהל קבוצה זו.</span>
+          <span className="text-red-400 text-xs font-black tracking-wide">מצב צפייה. אינך יכול לערוך הרכב.</span>
         </div>
       )}
 
@@ -1147,7 +1165,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           
           <div className={`flex-col gap-6 order-2 lg:order-1 ${viewMode === 'list' ? 'hidden lg:flex lg:col-span-4' : 'flex lg:col-span-4'}`}>
             
-            {/* פאנל חילופי מחצית - לא מופיע בגביע */}
             {!isCupModeActive && (
                 <div className="bg-slate-900/60 backdrop-blur-xl rounded-[32px] border border-orange-500/20 p-5 shadow-[0_0_30px_rgba(249,115,22,0.05)]">
                   <div className="flex justify-between items-center mb-4">
@@ -1161,7 +1178,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                   
                   <div className="space-y-3 mb-6">
                     <div className="relative">
-                      <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!isMyTeam || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
+                      <select value={subOutId} onChange={e => setSubOutId(e.target.value)} disabled={!canEditLineup || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-red-500/30 focus:border-red-500 outline-none appearance-none pr-10">
                         <option value="">בחר שחקן יוצא (מההרכב)</option>
                         {lineup.sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
                       </select>
@@ -1169,7 +1186,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     </div>
                     
                     <div className="relative">
-                      <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!isMyTeam || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
+                      <select value={subInId} onChange={e => setSubInId(e.target.value)} disabled={!canEditLineup || globalLock} className="w-full bg-slate-950/80 text-slate-300 text-sm font-bold p-3.5 rounded-2xl border border-green-500/30 focus:border-green-500 outline-none appearance-none pr-10">
                         <option value="">בחר שחקן נכנס (מהספסל)</option>
                         {bench.map(p => <option key={p.id} value={p.id}>{p.name} ({p.position})</option>)}
                       </select>
@@ -1177,7 +1194,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     </div>
                     
                     <div className="flex gap-2 pt-2">
-                      <button onClick={handleHalftimeSub} disabled={!isMyTeam || !subOutId || !subInId || globalLock} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
+                      <button onClick={handleHalftimeSub} disabled={!canEditLineup || !subOutId || !subInId || globalLock} className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-30 disabled:grayscale text-black font-black py-3.5 rounded-2xl text-sm transition-all shadow-lg active:scale-95">
                         בצע חילוף ⚡
                       </button>
                     </div>
@@ -1198,7 +1215,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                                             <span className="text-slate-600">➔</span>
                                             <span className="text-green-400">{sub.playerIn}</span>
                                         </div>
-                                        {isMyTeam && (
+                                        {canEditLineup && (
                                             <div className="flex gap-2">
                                                 <button 
                                                     onClick={() => {
@@ -1344,7 +1361,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                     
                     const allowFreeForm = isCupModeActive ? (cupSettings.stage === 'semi' || cupSettings.stage === 'final') : isPlayoffRound;
                     const effectiveMax = allowFreeForm && pos !== 'GK' ? 10 : maxPos;
-                    const showGhost = isMyTeam && posPlayers.length < effectiveMax && activeLineup.length < 11;
+                    const showGhost = canEditLineup && posPlayers.length < effectiveMax && activeLineup.length < 11;
                     
                     const rowZIndex = pos === 'GK' ? 'z-10' : pos === 'DEF' ? 'z-20' : pos === 'MID' ? 'z-30' : 'z-40';
                     
@@ -1352,9 +1369,9 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                       <div 
                         key={pos} 
                         onClick={() => { 
-                          if (isMyTeam && (!globalLock || isManagerOrAdmin)) setActiveZone(pos as any); 
+                          if (canEditLineup && (!globalLock || isManagerOrAdmin)) setActiveZone(pos as any); 
                         }}
-                        className={`flex-1 flex flex-col justify-center items-center w-full relative group ${isMyTeam && (!globalLock || isManagerOrAdmin) ? 'cursor-pointer' : ''} ${rowZIndex}`}
+                        className={`flex-1 flex flex-col justify-center items-center w-full relative group ${canEditLineup && (!globalLock || isManagerOrAdmin) ? 'cursor-pointer' : ''} ${rowZIndex}`}
                       >
                         <div className="absolute inset-x-2 inset-y-1 bg-white/0 group-hover:bg-white/5 rounded-2xl transition-colors border border-transparent group-hover:border-white/10 border-dashed flex items-center justify-center pointer-events-none"></div>
 
@@ -1624,7 +1641,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-3 relative z-10">
-              {isMyTeam && (
+              {canEditLineup && (
                 <button 
                   onClick={() => { togglePlayerPosition(selectedPlayer, lineup.find(p => p.id === selectedPlayer.id) ? 'lineup' : 'bench'); setSelectedPlayer(null); }}
                   className={`flex flex-col items-center justify-center py-4 rounded-2xl border transition-all active:scale-95 shadow-lg ${lineup.find(p => p.id === selectedPlayer.id) ? 'bg-gradient-to-br from-red-500/10 to-red-900/30 border-red-500/30 text-red-400 hover:border-red-400/50' : 'bg-gradient-to-br from-green-500/10 to-emerald-900/30 border-green-500/30 text-green-400 hover:border-green-400/50'}`}
@@ -1635,7 +1652,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
               )}
               <button 
                 onClick={(e) => openPlayerInfo(e, selectedPlayer)}
-                className={`flex flex-col items-center justify-center py-4 rounded-2xl border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white transition-all active:scale-95 shadow-lg ${!isMyTeam ? 'col-span-2' : ''}`}
+                className={`flex flex-col items-center justify-center py-4 rounded-2xl border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white transition-all active:scale-95 shadow-lg ${!canEditLineup ? 'col-span-2' : ''}`}
               >
                 <Search className="w-6 h-6 mb-2 opacity-80" />
                 <span className="font-black text-sm tracking-wide">חיפוש ברשת</span>
