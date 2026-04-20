@@ -23,7 +23,6 @@ const getTeamColors = (teamName: string, isGK: boolean) => {
   return { prim: '#3b82f6', sec: '#1e3a8a', text: '#ffffff' }; 
 };
 
-// --- פונקציות עזר ---
 const cleanStr = (s?: string | null) => String(s || '').toLowerCase().replace(/['"״׳`\-\s()]/g, '');
 
 const getNormalizedTeamId = (nameOrId: string) => {
@@ -635,6 +634,43 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     } catch (e) { setAppAlert({title:'שגיאה', msg: 'שגיאה בעדכון נקודות', type: 'error'}); }
   };
 
+  const generateRazZahaviSummary = (matchesData: any[]) => {
+    const titles = [
+      "שערורייה! פסטיבל! לוזון ליג בשיא העוצמה!", 
+      "קונצרט של כדורגל וניהול כושל! בואו נדבר תכלס!", 
+      "צחנה או שירה בתנועה? המחזור שטרף את הקלפים!", 
+      "הפטריוטים של הפנטזי: ינון מגל היה בוכה מהמחזור הזה!"
+    ];
+    let text = `🚨 **${titles[Math.floor(Math.random() * titles.length)]}** 🚨\n\n`;
+    text += `כאן רז זהבי, ואני אומר לכם שהמחזור הזה של פנטזי לוזון השאיר לי צפצופים באוזניים! איזה מנג'רים, איזו רמה! בואו נצלול למה שהיה על הדשא:\n\n`;
+    
+    const tightHomeWins = ["איזה קרב אדיר!", "משחק צמוד עם סכינים בין השיניים!", "המגרש רעד, אבל הבית שמר על הבית.", "ניצחון בשיניים, שלוש נקודות של אופי."];
+    const tightAwayWins = ["עקיצה של אלופים!", "גניבה לאור יום!", "אורחת לא מנומסת בעליל שלוקחת את כל הקופה.", "משחק חוץ אכזרי אבל יעיל."];
+    
+    matchesData.forEach((m) => {
+      const diff = Math.abs(m.homeScore - m.awayScore);
+      if (m.homeScore > m.awayScore) {
+        if (diff >= 20) {
+          text += `💥 **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\nמעוכה! קונצרט! ${m.hName} עשתה שמות ב${m.aName}, פירקה אותה ב-${diff} הפרש ולקחה 3 נקודות של דורסנות.\n\n`;
+        } else {
+          const randText = tightHomeWins[Math.floor(Math.random() * tightHomeWins.length)];
+          text += `⚔️ **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\n${randText} ${m.hName} גירדה פה 2 נקודות סופר חשובות.\n\n`;
+        }
+      } else if (m.awayScore > m.homeScore) {
+        if (diff >= 20) {
+          text += `🔥 **${m.aName} - ${m.hName} (${m.awayScore}:${m.homeScore})**\nשוד ושבר בקופות! ${m.aName} באה לזירת החוץ ופשוט דרסה. 3 נקודות קל למנג'ר הגאון.\n\n`;
+        } else {
+          const randText = tightAwayWins[Math.floor(Math.random() * tightAwayWins.length)];
+          text += `🎯 **${m.aName} - ${m.hName} (${m.awayScore}:${m.homeScore})**\n${randText} ${m.aName} לוקחת פה 2 נקודות חוץ יקרות מפז.\n\n`;
+        }
+      } else {
+        text += `🤝 **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\nחלוקת נקודות חסרת מעוף. נקודה אחת לכל אחת ויאללה הביתה.\n\n`;
+      }
+    });
+    text += `הטבלה רותחת, הפערים מצטמצמים, והמחזור הבא כבר מעבר לפינה. אל תלכו לשום מקום! 🍿`;
+    return text;
+  };
+
   const executeCloseRound = async () => {
     setConfirmCloseModalOpen(false); 
     setIsProcessingRound(true);
@@ -721,6 +757,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     setIsProcessingRound(false);
   };
 
+  // משתנה שמגדיר אם יש התראות (עבר למקום הנכון למעלה!)
   const hasAnyUnreadGlobal = teams.some(t => {
       if (t.id === 'admin') return false;
       const latestTs = getLatestTransferTimestamp(t);
@@ -749,14 +786,14 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
     <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-32 font-sans" dir="rtl">
       
       {toast && (
-        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[9999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
+        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[99999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
           <span className="text-2xl">{toast.type === 'error' ? '🛑' : '✅'}</span>
           <span className="font-black text-sm tracking-wide">{toast.msg}</span>
         </div>
       )}
 
       {appAlert && (
-        <div className="fixed inset-0 z-[5000] flex items-center justify-center px-4 pb-[95px] md:pb-[100px] bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center px-4 pt-[90px] pb-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-700 p-8 rounded-[32px] w-full max-w-md shadow-2xl flex flex-col items-center text-center">
             {appAlert.type === 'success' && <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mb-6"><CheckCircle2 className="w-10 h-10 text-green-500" /></div>}
             {appAlert.type === 'error' && <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mb-6"><AlertTriangle className="w-10 h-10 text-red-500" /></div>}
@@ -800,16 +837,16 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
       {/* 🟢 יומן אירועים 🟢 */}
       {isLogModalOpen && (
-        <div className="fixed inset-0 z-[3000] flex items-end md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setIsLogModalOpen(false)}></div>
-          <div className="bg-[#0f172a] border border-slate-800 rounded-t-[32px] md:rounded-[32px] w-full max-w-2xl shadow-2xl flex flex-col relative h-[85vh] md:max-h-[calc(100vh-140px)] animate-in slide-in-from-bottom-10 overflow-hidden">
+        <div className="fixed inset-0 z-[99999] flex flex-col justify-end md:justify-center items-center px-0 md:px-4 pb-0 md:pb-4 pt-[90px] md:pt-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setIsLogModalOpen(false)}>
+          <div className="w-full max-w-4xl bg-[#0f172a] rounded-t-[32px] md:rounded-[32px] flex flex-col relative shadow-[0_-10px_40px_rgba(0,0,0,0.5)] md:shadow-2xl overflow-hidden max-h-[calc(100dvh-90px)] md:max-h-[85vh] animate-in slide-in-from-bottom-10 border-t md:border border-slate-700/50" onClick={e => e.stopPropagation()}>
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700/50 rounded-full md:hidden"></div>
             
-            <div className="flex justify-between items-center w-full p-5 md:p-6 border-b border-slate-800 shrink-0 bg-[#0f172a] z-20 relative">
+            <div className="flex justify-between items-center w-full p-4 md:p-6 border-b border-slate-800 shrink-0 bg-[#0f172a] z-20 mt-2 md:mt-0">
                <h3 className="text-xl md:text-2xl font-black text-white flex items-center gap-3"><ClipboardList className="w-6 h-6 text-blue-400" />יומן אירועים</h3>
                <button onClick={() => setIsLogModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black shrink-0"><X className="w-5 h-5"/></button>
             </div>
             
-            <div className="p-4 md:p-5 bg-slate-900/50 border-b border-slate-800 flex flex-wrap justify-center gap-2 md:gap-3 shrink-0">
+            <div className="p-3 md:p-5 bg-slate-900/50 border-b border-slate-800 flex flex-wrap justify-center gap-2 md:gap-3 shrink-0">
               <button onClick={() => handleSelectLogTab('all')} className={`px-4 py-2 rounded-full text-xs md:text-sm font-black transition-all flex items-center gap-2 border ${logTeamId === 'all' ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-900/50' : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-600'}`}>
                   <Globe2 className="w-4 h-4" /><span>כל הליגה</span>
               </button>
@@ -948,14 +985,14 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           <div className="p-5 md:p-8 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-6 relative z-10">
               
               <div className="flex flex-wrap md:flex-nowrap gap-2 md:gap-3 w-full md:w-auto order-3 md:order-1 justify-center md:justify-start" data-html2canvas-ignore="true">
-                <button onClick={handleOpenLogModal} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
+                <button onClick={handleOpenLogModal} title="יומן אירועים" className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                   <ClipboardList className="w-5 h-5 group-active:scale-90 transition-transform" />
                   <span className="text-xs md:text-sm font-bold md:hidden">יומן</span>
                   <span className="hidden md:inline font-bold text-sm ml-1">יומן</span>
                   {hasAnyUnreadGlobal && <span className="absolute -top-1 -right-1 flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span></span>}
                 </button>
 
-                <button onClick={shareArenaAsImage} className="flex-1 md:flex-none p-3 md:p-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl border border-blue-500/50 transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)] flex items-center justify-center gap-2 group relative active:scale-95">
+                <button onClick={shareArenaAsImage} title="שתף תמונת זירה לווצאפ" className="flex-1 md:flex-none p-3 md:p-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-2xl border border-blue-500/50 transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)] flex items-center justify-center gap-2 group relative active:scale-95">
                   <ImageIcon className="w-5 h-5 group-active:scale-90 transition-transform" />
                   <span className="text-xs md:text-sm font-bold md:hidden">שתף</span>
                   <span className="hidden md:inline font-bold text-sm ml-1">שתף לווצאפ</span>
@@ -963,10 +1000,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
                 {isModerator && (
                   <>
-                    <button onClick={() => setDriveModalOpen(true)} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-blue-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
+                    <button onClick={() => setDriveModalOpen(true)} title="סנכרון נתונים מאקסל" className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-blue-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                       <DownloadCloud className={`w-5 h-5 group-active:scale-90 transition-transform ${isProcessingRound ? 'animate-bounce text-blue-400' : ''}`} />
                     </button>
-                    <button onClick={exportArenaToExcel} className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-green-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
+                    <button onClick={exportArenaToExcel} title="ייצוא ל-Excel" className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-green-400 rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                       <Download className="w-5 h-5 group-active:scale-90 transition-transform" />
                     </button>
                   </>
@@ -986,7 +1023,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
               <div className="w-full md:w-auto order-2 md:order-3 flex justify-center md:justify-end" data-html2canvas-ignore="true">
                 {isModerator ? (
-                  <button onClick={() => setConfirmCloseModalOpen(true)} disabled={isProcessingRound} className="w-full md:w-auto bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white font-black py-3 md:py-3.5 px-6 rounded-2xl border border-red-500/50 transition-all active:scale-95 text-sm shadow-lg flex items-center justify-center gap-2 group relative">
+                  <button onClick={() => setConfirmCloseModalOpen(true)} title="סגירת מחזור" disabled={isProcessingRound} className="w-full md:w-auto bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white font-black py-3 md:py-3.5 px-6 rounded-2xl border border-red-500/50 transition-all active:scale-95 text-sm shadow-lg flex items-center justify-center gap-2 group relative">
                     {isProcessingRound ? <span className="animate-pulse">מעבד...</span> : <>סגור מחזור <Flame className="w-4 h-4" /></>}
                   </button>
                 ) : <div className="hidden md:block w-[180px]"></div>}
@@ -1014,7 +1051,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     {/* --- קבוצת בית --- */}
                     <button onClick={() => toggleTeam(match.h)} className={`flex-1 flex flex-col justify-center items-center md:items-start px-1 sm:px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.h ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת בית</span>
-                      <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full truncate max-w-[85px] sm:max-w-full ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
+                      <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full text-center md:text-right leading-tight break-words px-1 ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
                       
                       {/* 🟢 כפתור "בקנה" של קבוצת הבית 🟢 */}
                       <div onClick={(e) => { e.stopPropagation(); setUntouchedModal({teamId: match.h, teamName: TEAM_NAMES[match.h] || match.h}); }} className="mt-1.5 bg-slate-900/80 hover:bg-slate-700 transition-colors px-2 md:px-2.5 py-1 rounded-lg border border-slate-600 shadow-sm whitespace-nowrap z-10 flex items-center gap-1 cursor-pointer">
@@ -1049,7 +1086,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     {/* --- קבוצת חוץ --- */}
                     <button onClick={() => toggleTeam(match.a)} className={`flex-1 flex flex-col justify-center items-center md:items-end px-1 sm:px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.a ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת חוץ</span>
-                      <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full truncate max-w-[85px] sm:max-w-full ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>
+                      <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full text-center md:text-left leading-tight break-words px-1 ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>
                       
                       {/* 🟢 כפתור "בקנה" של קבוצת החוץ 🟢 */}
                       <div onClick={(e) => { e.stopPropagation(); setUntouchedModal({teamId: match.a, teamName: TEAM_NAMES[match.a] || match.a}); }} className="mt-1.5 bg-slate-900/80 hover:bg-slate-700 transition-colors px-2 md:px-2.5 py-1 rounded-lg border border-slate-600 shadow-sm whitespace-nowrap z-10 flex items-center gap-1 cursor-pointer">
@@ -1181,20 +1218,19 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           const isEditable = isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(team?.teamName || ''));
 
           return (
-            <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setUntouchedModal(null)}>
-               <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-md h-[70vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
+            <div className="fixed inset-0 z-[99999] flex items-end md:items-center justify-center px-0 md:px-4 pb-[85px] md:pb-[100px] pt-[90px] md:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setUntouchedModal(null)}>
+               <div className="w-full max-w-md bg-[#0f172a] rounded-t-[32px] md:rounded-[32px] flex flex-col relative shadow-[0_-10px_40px_rgba(0,0,0,0.5)] md:shadow-2xl overflow-hidden max-h-[calc(100dvh-90px)] md:max-h-[85vh] animate-in slide-in-from-bottom-10 border-t md:border border-slate-700/50" onClick={e => e.stopPropagation()}>
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700/50 rounded-full md:hidden"></div>
                   
-                  <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
-                     <div className="flex justify-between items-start mb-2 w-full">
-                         <div className="flex flex-col">
-                             <h3 className="text-xl font-black text-white flex items-center gap-2">⏳ שחקנים בקנה</h3>
-                             <span className="text-sm text-blue-400 font-bold">{untouchedModal.teamName}</span>
-                         </div>
-                         <button onClick={() => setUntouchedModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
-                            <X className="w-5 h-5" />
-                         </button>
+                  <div className="flex justify-between items-start mt-2 md:mt-0 mb-2 w-full p-4 sm:p-5 border-b border-slate-800 shrink-0 relative">
+                     <div className="flex flex-col">
+                         <h3 className="text-xl font-black text-white flex items-center gap-2">⏳ שחקנים בקנה</h3>
+                         <span className="text-sm text-blue-400 font-bold">{untouchedModal.teamName}</span>
+                         <p className="text-xs text-slate-400 mt-1">טרם שיחקו או נוקדו. <br/>{isEditable && <span className="text-green-400">לחיצה תפתח את חלון הניקוד.</span>}</p>
                      </div>
-                     <p className="text-xs text-slate-400">שחקנים אלו טרם שיחקו או טרם נוקדו. <br/>{isEditable && <span className="text-green-400">לחיצה על שחקן תפתח את חלון הניקוד.</span>}</p>
+                     <button onClick={() => setUntouchedModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
+                        <X className="w-5 h-5" />
+                     </button>
                   </div>
 
                   <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a] space-y-2">
@@ -1335,11 +1371,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           const groupedKeys = Object.keys(grouped).sort();
 
           return (
-            <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
+            <div className="fixed inset-0 z-[99999] flex items-end md:items-center justify-center px-0 md:px-4 pb-[85px] md:pb-[100px] pt-[90px] md:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
                <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-4xl h-[85vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
                   
                   <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
-                     <div className="flex justify-between items-start mb-4 w-full">
+                     <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700 rounded-full md:hidden"></div>
+                     <div className="flex justify-between items-start mb-4 w-full mt-2 md:mt-0">
                          <h3 className="text-xl font-black text-white flex items-center gap-2">📊 דוח ניקוד VAR</h3>
                          <button onClick={() => setAuditModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
                             <X className="w-5 h-5" />
@@ -1412,18 +1449,17 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
           );
       })()}
 
-      {/* 🟢 מודל (חלון צף) לעריכת פריטי משחק בשחקן (הקיים - עודכן עם ה-X) 🟢 */}
+      {/* 🟢 מודל (חלון צף) לעריכת פריטי משחק בשחקן (הקיים) 🟢 */}
       {editingPlayer && (
-        <div className="fixed inset-0 z-[9999] flex flex-col justify-end sm:justify-center items-center pt-10 px-0 sm:px-4 pb-[95px] sm:pb-[100px] pointer-events-none">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md pointer-events-auto animate-in fade-in duration-300" onClick={() => setEditingPlayer(null)}></div>
+        <div className="fixed inset-0 z-[99999] flex flex-col justify-end sm:justify-center items-center px-0 sm:px-4 pb-[85px] sm:pb-[100px] pt-[90px] sm:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setEditingPlayer(null)}>
           
-          <div className="relative w-full max-w-lg bg-slate-900 rounded-t-[32px] sm:rounded-[32px] border-t sm:border border-slate-700/50 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col pointer-events-auto overflow-hidden animate-in slide-in-from-bottom-10 duration-300 max-h-[80vh] sm:max-h-[calc(100vh-140px)]">
+          <div className="relative w-full max-w-lg bg-slate-900 rounded-t-[32px] sm:rounded-[32px] border-t sm:border border-slate-700/50 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col pointer-events-auto overflow-hidden animate-in slide-in-from-bottom-10 duration-300 max-h-[calc(100dvh-90px)] md:max-h-[85vh]" onClick={e => e.stopPropagation()}>
             
-            <div className="flex-none p-5 pt-5 md:p-6 border-b border-slate-800 bg-slate-950/50 flex justify-between items-start relative z-20 shadow-sm w-full gap-4">
+            <div className="flex-none p-5 pt-5 md:p-6 border-b border-slate-800 bg-slate-950/50 flex justify-between items-start relative z-20 shadow-sm w-full gap-4 mt-2 md:mt-0">
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-800 rounded-full sm:hidden"></div>
               
               <div className="flex justify-between items-center w-full">
-                  <div className="flex items-center gap-4 mt-2 sm:mt-0">
+                  <div className="flex items-center gap-4">
                     <div className="w-12 h-12 md:w-14 md:h-14 relative shrink-0">
                        <Jersey primary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').prim} secondary={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').sec} textColor={getTeamColors(TEAM_NAMES[editingPlayer.teamId], editingPlayer.player.position === 'GK').text} text={['GK', 'שוער'].includes(editingPlayer.player.position) ? '🧤' : editingPlayer.player.position} />
                     </div>
@@ -1437,7 +1473,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                     </div>
                   </div>
                   
-                  <div className="flex gap-3 items-center">
+                  <div className="flex gap-3 items-center shrink-0">
                       <div className="text-center bg-slate-900 px-4 md:px-5 py-2 md:py-2.5 rounded-2xl border border-slate-800 shadow-inner relative group">
                         <div className="text-2xl md:text-3xl font-black text-green-400 tabular-nums leading-none">{currentDisplayPoints}</div>
                         <div className="text-[8px] md:text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-1">Points</div>
@@ -1524,10 +1560,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         const t2Name = TEAM_NAMES[h2hModal.aId] || h2hModal.aId;
 
         return (
-          <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[95px] md:pb-[100px] pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setH2hModal(null)}>
-            <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-md h-[80vh] md:h-auto md:max-h-[calc(100vh-140px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-[6000] flex items-end md:items-center justify-center px-0 md:px-4 pb-[85px] md:pb-[100px] pt-[90px] md:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setH2hModal(null)}>
+            <div className="w-full max-w-md bg-[#0f172a] rounded-t-[32px] md:rounded-[32px] flex flex-col relative shadow-[0_-10px_40px_rgba(0,0,0,0.5)] md:shadow-2xl overflow-hidden max-h-[calc(100dvh-90px)] md:max-h-[85vh] animate-in slide-in-from-bottom-10 border-t md:border border-slate-700/50" onClick={e => e.stopPropagation()}>
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700/50 rounded-full md:hidden"></div>
               
-              <div className="flex justify-between items-start bg-slate-900 p-5 sm:p-6 border-b border-slate-800 shrink-0 w-full">
+              <div className="flex justify-between items-center w-full p-5 sm:p-6 border-b border-slate-800 shrink-0 bg-slate-900 mt-2 md:mt-0">
                   <div className="flex justify-center items-center gap-4 flex-1">
                       <span className="text-lg font-black text-white truncate">{t1Name}</span>
                       <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest border border-red-500/30 shrink-0">VS</span>
@@ -1538,7 +1575,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                   </button>
               </div>
 
-              <div className="p-4 sm:p-6 flex-1 overflow-y-auto custom-scrollbar space-y-6">
+              <div className="p-4 sm:p-6 flex-1 overflow-y-auto custom-scrollbar space-y-6 bg-[#0f172a]">
                 {h2hData.pastEncounters.length === 0 ? (
                   <div className="text-center py-10 text-slate-500 font-bold">טרם שוחקו משחקים ביניהן העונה.</div>
                 ) : (
@@ -1576,8 +1613,8 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
       {/* 🟢 מודל: משיכה מדרייב 🟢 */}
       {driveModalOpen && (
-        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-start md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
-            <div className="bg-slate-900 border border-blue-500/50 rounded-t-[40px] md:rounded-[40px] p-6 md:p-8 w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.15)] relative text-center max-h-[85vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 bg-black/90 z-[99999] flex items-start md:items-center justify-center px-0 pb-[85px] md:pb-[100px] md:px-4 pt-[90px] md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
+            <div className="bg-slate-900 border border-blue-500/50 rounded-t-[40px] md:rounded-[40px] p-6 md:p-8 w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.15)] relative text-center max-h-[calc(100dvh-90px)] md:max-h-[85vh] overflow-y-auto custom-scrollbar">
                 
                 <div className="flex justify-between items-start w-full mb-6 pb-4 border-b border-slate-800 shrink-0">
                    <h3 className="text-2xl font-black text-white flex items-center gap-2">סנכרון נתונים מאקסל</h3>
@@ -1626,9 +1663,9 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         </div>
       )}
 
-      {/* 🟢 מודל לסגירת מחזור 🟢 */}
+      {/* 🟢 מודלים לאישור סגירה 🟢 */}
       {confirmCloseModalOpen && (
-        <div className="fixed inset-0 bg-black/90 z-[9999] flex items-start md:items-center justify-center px-0 pb-[95px] md:pb-[100px] md:px-4 pt-10 md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 bg-black/90 z-[99999] flex items-start md:items-center justify-center px-0 pb-[85px] md:pb-[100px] md:px-4 pt-[90px] md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
           <div className="bg-slate-900 border border-red-500/50 p-8 rounded-t-[40px] md:rounded-[40px] w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(239,68,68,0.15)] relative text-center mt-auto md:mt-0">
             
             <div className="flex justify-between items-start w-full mb-6 absolute top-6 right-6 left-6 pointer-events-none">
