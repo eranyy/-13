@@ -156,6 +156,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [adminSquad, setAdminSquad] = useState<Player[]>([]);
   
   const [realFixtures, setRealFixtures] = useState<any[]>([]);
+  const [fixtures, setFixtures] = useState<any[]>([]); // <-- תוספת: סטייט ללוח המשחקים בפנטזי
 
   const [toast, setToast] = useState<{msg: string, type: 'error'|'success'|'info'} | null>(null);
   const [appAlert, setAppAlert] = useState<{title: string, msg: string, type: 'success'|'error'|'info', whatsappText?: string} | null>(null);
@@ -220,7 +221,14 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         }
     });
 
-    return () => { unsub(); unsubSettings(); unsubCup(); };
+    // 👇 תוספת: משיכת משחקי הליגה שלנו (פנטזי) כדי לאתר נגד מי הקבוצה משחקת 👇
+    const unsubFixtures = onSnapshot(doc(db, 'leagueData', 'fixtures'), docSnap => {
+        if(docSnap.exists()) {
+            setFixtures(docSnap.data().rounds || []);
+        }
+    });
+
+    return () => { unsub(); unsubSettings(); unsubCup(); unsubFixtures(); };
   }, []);
 
   const isPlayoffRound = playoffRounds.includes(currentRound);
@@ -424,7 +432,23 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
   const handleWhatsAppShare = () => {
     if (!myTeam) return;
-    let text = `*${isCupModeActive ? 'הרכב גביע 🏆' : 'הרכב ליגה ⚽'} - ${myTeam.teamName}*\n*מערך: ${currentFormationStr}*\n\n`;
+
+    // 👇 תוספת מציאת היריבה להודעת הווצאפ 👇
+    let opponentStr = "";
+    if (!isCupModeActive) {
+        const currentMatches = fixtures.find((r: any) => r.round === currentRound)?.matches || [];
+        const myMatch = currentMatches.find((m: any) => m.h === myTeam.id || m.a === myTeam.id);
+        if (myMatch) {
+            const oppId = myMatch.h === myTeam.id ? myMatch.a : myMatch.h;
+            const TEAM_NAMES_FALLBACK: Record<string, string> = { tumali: 'תומאלי', tampa: 'טמפה', pichichi: "פיצ'יצ'י", hamsili: 'חמסילי', harale: 'חראלה', holonia: 'חולוניה' };
+            const oppTeam = teams.find(t => t.id === oppId);
+            const oppName = oppTeam?.teamName || TEAM_NAMES_FALLBACK[oppId] || oppId;
+            opponentStr = `*נגד:* ${oppName}\n`;
+        }
+    }
+    // 👆 סוף התוספת 👆
+
+    let text = `*${isCupModeActive ? 'הרכב גביע 🏆' : 'הרכב ליגה ⚽'} - ${myTeam.teamName}*\n${opponentStr}*מערך: ${currentFormationStr}*\n\n`;
     
     POS_ARRAY.forEach(pos => {
       const posPlayers = lineup.filter(p => p.position === pos).map(p => {

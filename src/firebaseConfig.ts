@@ -1,7 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
-import { getMessaging } from "firebase/messaging"; // הוספנו את שירות ההודעות
+import { getMessaging } from "firebase/messaging";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAYU35Cc-mewf1WAHjHUAcmq1ATntoU9YI",
@@ -16,4 +17,5 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-export const messaging = getMessaging(app); // הפעלנו את שירות ההודעות כדי שנוכל לייצא אותו
+export const messaging = getMessaging(app);
+export const functions = getFunctions(app);

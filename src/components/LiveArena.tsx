@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { ChevronDown, Download, DownloadCloud, AlertTriangle, CheckCircle2, Trophy, Flame, RefreshCw, Undo2, ClipboardList, Globe2, Share2, Image as ImageIcon, Swords, CalendarDays, X, Users, Edit3 } from 'lucide-react';
-import { db } from '../firebaseConfig';
+import { db, functions } from '../firebaseConfig';
 import { doc, onSnapshot, updateDoc, addDoc, collection, getDoc, setDoc, serverTimestamp, arrayUnion } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { UserRole } from '../types';
 import html2canvas from 'html2canvas';
 
@@ -686,6 +687,8 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       const emptyStats = { started: false, played60: false, notInSquad: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 };
 
       const matchesDataForSummary: any[] = [];
+      const excelSyncRows: any[] = []; 
+
       for (const match of currentMatches) {
         const homeScore = calculateTeamScore(match.h);
         const awayScore = calculateTeamScore(match.a);
@@ -699,14 +702,50 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
         const hTeam = teams.find(t => t.id === match.h); const aTeam = teams.find(t => t.id === match.a);
 
         if(hTeam) {
+          const hLineupForExcel = applySubstitutionsToLineup(hTeam);
+          hLineupForExcel.forEach((player: any) => {
+            excelSyncRows.push({
+                syncId: `R${currentRound}_${hTeam.id}_${player.id}`,
+                date: new Date().toISOString().split('T')[0],
+                round: currentRound,
+                fantasyTeam: TEAM_NAMES[hTeam.id] || hTeam.id,
+                player: player.name,
+                points: player.points || 0
+            });
+          });
+
           const resetSquad = (hTeam.squad || []).map((p:any) => ({...p, points: 0, stats: emptyStats}));
           await updateDoc(doc(db, 'users', hTeam.id), { points: (hTeam.points || 0) + hPts, gf: (hTeam.gf || 0) + homeScore, ga: (hTeam.ga || 0) + awayScore, wins: (hTeam.wins || 0) + hW, draws: (hTeam.draws || 0) + hD, losses: (hTeam.losses || 0) + hL, played: (hTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad });
         }
+
         if(aTeam) {
+          const aLineupForExcel = applySubstitutionsToLineup(aTeam);
+          aLineupForExcel.forEach((player: any) => {
+            excelSyncRows.push({
+                syncId: `R${currentRound}_${aTeam.id}_${player.id}`,
+                date: new Date().toISOString().split('T')[0],
+                round: currentRound,
+                fantasyTeam: TEAM_NAMES[aTeam.id] || aTeam.id,
+                player: player.name,
+                points: player.points || 0
+            });
+          });
+
           const resetSquad = (aTeam.squad || []).map((p:any) => ({...p, points: 0, stats: emptyStats}));
           await updateDoc(doc(db, 'users', aTeam.id), { points: (aTeam.points || 0) + aPts, gf: (aTeam.gf || 0) + awayScore, ga: (aTeam.ga || 0) + homeScore, wins: (aTeam.wins || 0) + aW, draws: (aTeam.draws || 0) + aD, losses: (aTeam.losses || 0) + aL, played: (aTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad });
         }
       }
+
+      // --- סנכרון לאקסל ---
+      try {
+          const TARGET_SPREADSHEET_ID = '1_tq9_QMdifGLHzw-cZVJGYRsUZ-5R5RkCyXHzkoMHS8'; 
+          const syncMatchToExcelFunc = httpsCallable(functions, 'syncMatchToExcel');
+          await syncMatchToExcelFunc({ rows: excelSyncRows, spreadsheetId: TARGET_SPREADSHEET_ID });
+          console.log('✅ Data synced to Google Sheets successfully!');
+      } catch (excelError) {
+          console.error('❌ Failed to sync to Google Sheets:', excelError);
+      }
+      // --- סוף סנכרון לאקסל ---
 
       const activeApiKey = process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
 
@@ -752,12 +791,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
       
       await setDoc(doc(db, 'round_backups', `backup_round_${currentRound}`), backupData);
 
-      setAppAlert({title: 'מחזור נסגר', msg: 'המחזור נסגר בהצלחה! הניקוד, שערי הזכות/חובה והניצחונות עודכנו בטבלה.', type: 'success'});
+      setAppAlert({title: 'מחזור נסגר', msg: 'המחזור נסגר בהצלחה! הניקוד עבר לטבלה וסונכרן למסד הנתונים האוטומטי (אקסל).', type: 'success'});
     } catch (e: any) { setAppAlert({title: 'שגיאה', msg: 'שגיאה בסגירת מחזור: ' + e.message, type: 'error'}); }
     setIsProcessingRound(false);
   };
 
-  // משתנה שמגדיר אם יש התראות (עבר למקום הנכון למעלה!)
   const hasAnyUnreadGlobal = teams.some(t => {
       if (t.id === 'admin') return false;
       const latestTs = getLatestTransferTimestamp(t);
@@ -1042,6 +1080,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             const hUntouched = getUntouchedCount(match.h);
             const aUntouched = getUntouchedCount(match.a);
             
+            const hTeam = teams.find(t => t.id === match.h);
+            const aTeam = teams.find(t => t.id === match.a);
+            const expandedTeamObj = isExpanded ? teams.find(t => t.id === expandedTeamId) : null;
+            const isEditable = isModerator || (loggedInUser && expandedTeamObj && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(expandedTeamObj.teamName));
+            
             return (
               <div key={idx} className={`bg-slate-900/60 backdrop-blur-md rounded-[32px] border transition-all duration-300 overflow-hidden flex flex-col ${isExpanded ? 'border-slate-500 shadow-[0_0_30px_rgba(255,255,255,0.05)]' : 'border-slate-800 shadow-xl hover:border-slate-700'}`}>
                 
@@ -1098,7 +1141,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                   </div>
                 </div>
 
-                {isExpanded && (
+                {isExpanded && expandedTeamObj && (
                   <div className="animate-in slide-in-from-top-4 duration-300 border-t border-slate-800 bg-slate-950/50" data-html2canvas-ignore="true">
                     <div className="p-4 md:p-6">
                       <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6 gap-4">
@@ -1110,7 +1153,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                           </div>
                         </div>
                         <div className="bg-slate-900 border border-slate-700 px-4 py-2 rounded-xl shadow-inner">
-                            <span className="text-xs font-black text-slate-300 tracking-widest flex items-center gap-2"><span>מערך</span><span className="text-green-400">{getFormation(applySubstitutionsToLineup(teams.find(t => t.id === expandedTeamId)))}</span></span>
+                            <span className="text-xs font-black text-slate-300 tracking-widest flex items-center gap-2"><span>מערך</span><span className="text-green-400">{getFormation(applySubstitutionsToLineup(expandedTeamObj))}</span></span>
                         </div>
                       </div>
 
@@ -1129,8 +1172,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
 
                         <div className="flex flex-col justify-around h-full gap-8 relative z-10 py-4">
                           {['GK', 'DEF', 'MID', 'FWD'].map(pos => {
-                            const teamObj = teams.find(t => t.id === expandedTeamId!);
-                            const currentLineup = applySubstitutionsToLineup(teamObj);
+                            const currentLineup = applySubstitutionsToLineup(expandedTeamObj);
                             const posPlayers = currentLineup.filter((p: any) => isPosMatch(p.position, pos));
                             
                             if (posPlayers.length === 0) return <div key={pos} className="min-h-[50px]"></div>;
@@ -1140,20 +1182,18 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                                 {posPlayers.map((p: any) => {
                                   const nameParts = p.name.split(' ');
                                   const lastName = nameParts[nameParts.length - 1];
-                                  const isSubIn = (teamObj?.transfers || []).some((t:any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED' && t.playerIn === p.name);
-                                  const colors = getTeamColors(teamObj?.teamName || '', p.position === 'GK');
+                                  const isSubIn = (expandedTeamObj?.transfers || []).some((t:any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED' && t.playerIn === p.name);
+                                  const colors = getTeamColors(expandedTeamObj?.teamName || '', p.position === 'GK');
                                   
                                   const hasPlayed = (p.stats && Object.values(p.stats).some(v => v === true || (typeof v === 'number' && v > 0))) || (Number(p.points) !== 0);
                                   const isUntouched = !hasPlayed && Number(p.points) === 0;
-
-                                  const isEditable = isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(teamObj?.teamName || ''));
 
                                   return (
                                     <div key={p.id} onClick={() => { if(isEditable) setEditingPlayer({teamId: expandedTeamId!, player: p}); }} className={`flex flex-col items-center gap-0.5 group active:scale-95 transition-transform w-[48px] sm:w-[64px] md:w-[76px] relative ${isEditable ? 'cursor-pointer' : ''}`}>
                                       <div className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 relative transition-all duration-300 group-hover:-translate-y-2 group-hover:scale-110 z-20">
                                         <Jersey primary={colors.prim} secondary={colors.sec} textColor={colors.text} text={['GK', 'שוער'].includes(p.position) ? '🧤' : p.position} />
                                         
-                                        <div className={`absolute -top-2.5 -right-2.5 sm:-top-3 sm:-right-3 min-w-[22px] h-[22px] sm:min-w-[24px] sm:h-[24px] px-1 rounded-full flex items-center justify-center text-[10.5px] sm:text-xs font-black shadow-[0_4px_10px_rgba(0,0,0,0.5)] border-2 z-30 ${
+                                        <div className={`absolute -top-2.5 -right-2.5 sm:-top-3 sm:-right-3 min-w-[22px] h-[22px] sm:min-w-[24px] h-[24px] px-1 rounded-full flex items-center justify-center text-[10.5px] sm:text-xs font-black shadow-[0_4px_10px_rgba(0,0,0,0.5)] border-2 z-30 ${
                                           p.points > 0 ? 'bg-green-500 text-black border-slate-900' : 
                                           p.points < 0 ? 'bg-red-500 text-white border-slate-900' : 
                                           isUntouched ? 'bg-slate-800/80 text-slate-500 border-slate-600 border-dashed' : 
@@ -1186,6 +1226,58 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
                           })}
                         </div>
                       </div>
+
+                      {/* 🟢 שורת חילופי מחצית שבוצעו (תצוגה בלבד עם אפשרות ניקוד) 🟢 */}
+                      {(() => {
+                        const roundSubs = (expandedTeamObj?.transfers || []).filter((t:any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+                        
+                        if (roundSubs.length === 0) return null;
+
+                        return (
+                          <div className="mt-4 bg-slate-900 border border-slate-700 rounded-[20px] p-4">
+                            <h4 className="text-white font-black flex items-center gap-2 mb-3">
+                              <RefreshCw className="w-4 h-4 text-orange-500" /> 
+                              חילופי מחצית שבוצעו ({roundSubs.length}/3)
+                            </h4>
+                            <div className="flex flex-col gap-2">
+                              {roundSubs.map((sub: any, idx: number) => {
+                                const allPossiblePlayers = [...(expandedTeamObj.published_lineup || []), ...(expandedTeamObj.published_subs_out || []), ...(expandedTeamObj.squad || []), ...(expandedTeamObj.players || [])];
+                                const pOut = allPossiblePlayers.find(p => p.name === sub.playerOut) || { name: sub.playerOut, points: 0, position: '' };
+                                const pIn = allPossiblePlayers.find(p => p.name === sub.playerIn) || { name: sub.playerIn, points: 0, position: '' };
+
+                                return (
+                                  <div key={idx} className="flex items-center justify-between bg-slate-800/50 p-2.5 md:p-3 rounded-xl border border-slate-700">
+                                    {/* שחקן יוצא */}
+                                    <button
+                                      onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pOut}); }}
+                                      className={`flex-1 flex items-center justify-start gap-2 text-left ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}
+                                    >
+                                      <div className="bg-red-500/20 text-red-400 font-black text-[10px] px-2 py-0.5 rounded uppercase shrink-0">יצא</div>
+                                      <span className="text-white font-bold text-xs md:text-sm truncate">{pOut.name}</span>
+                                      <span className="text-slate-400 font-black text-xs md:text-sm ml-auto">({pOut.points || 0})</span>
+                                    </button>
+
+                                    {/* חץ אסתטי */}
+                                    <div className="px-2 md:px-4 shrink-0">
+                                      <RefreshCw className="w-4 h-4 text-slate-500" />
+                                    </div>
+
+                                    {/* שחקן נכנס */}
+                                    <button
+                                      onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pIn}); }}
+                                      className={`flex-1 flex items-center justify-end gap-2 text-right ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}
+                                    >
+                                      <span className="text-slate-400 font-black text-xs md:text-sm mr-auto">({pIn.points || 0})</span>
+                                      <span className="text-white font-bold text-xs md:text-sm truncate text-right">{pIn.name}</span>
+                                      <div className="bg-green-500/20 text-green-400 font-black text-[10px] px-2 py-0.5 rounded uppercase shrink-0">נכנס</div>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                     </div>
                   </div>
@@ -1678,11 +1770,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams, currentRound, isModerator,
             </div>
             <h3 className="text-2xl font-black text-white mb-2">סגירת מחזור {currentRound}</h3>
             <p className="text-slate-400 font-bold mb-8 leading-relaxed">
-              האם אתה בטוח שברצונך לסגור את המחזור? פעולה זו תעדכן את הטבלה, תאפס את ההרכבים ל-0 ותקדם את הליגה למחזור הבא. <br/><span className="text-red-400 font-black mt-2 inline-block">לא ניתן לבטל פעולה זו!</span>
+              האם אתה בטוח שברצונך לסגור את המחזור? פעולה זו תעדכן את הטבלה, תאפס את ההרכבים ל-0, <b>תסנכרן לאקסל</b> ותקדם את הליגה למחזור הבא. <br/><span className="text-red-400 font-black mt-2 inline-block">לא ניתן לבטל פעולה זו!</span>
             </p>
             <div className="flex gap-3">
               <button onClick={executeCloseRound} disabled={isProcessingRound} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 flex justify-center items-center">
-                {isProcessingRound ? 'מעבד...' : 'כן, סגור מחזור! 🔒'}
+                {isProcessingRound ? 'מעבד...' : 'כן, סגור וסנכרן לאקסל! 🔒'}
               </button>
             </div>
           </div>
