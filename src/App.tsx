@@ -90,6 +90,7 @@ const App: React.FC = () => {
 
         await setDoc(doc(db, 'presence', presenceDocId), {
           name: displayName,
+          email: loggedInUser.email,
           lastSeen: serverTimestamp(),
           teamName: loggedInUser.teamName
         }, { merge: true });
@@ -241,7 +242,7 @@ const App: React.FC = () => {
       
       <main className="flex-1 overflow-x-hidden p-4 md:p-8 relative z-10">
         {activeTab === 'home' && <SocialFeed teams={teams} currentRound={currentRound} loggedInUser={{...loggedInUser, name: displayName}} onNavigate={() => setActiveTab('table')} />}
-        {activeTab === 'live' && <LiveArena currentRound={currentRound} teams={teams} isModerator={isModerator} loggedInUser={{...loggedInUser, name: displayName}} />}
+        {activeTab === 'live' && <LiveArena currentRound={currentRound} teams={teams} isModerator={isModerator} loggedInUser={{...loggedInUser, name: displayName}} isAdmin={isEran} />}
         {activeTab === 'lineup' && <LineupManager teams={teams} loggedInUser={{...loggedInUser, name: displayName}} currentRound={currentRound} isAdmin={isEran} />}
         {activeTab === 'fixtures' && <FixturesTab currentRound={currentRound} isAdmin={isEran} />}
         {activeTab === 'table' && <div className="max-w-4xl mx-auto"><AdminLeagueManager isAdmin={isEran} inline={true} initialSubTab="table" /></div>}
