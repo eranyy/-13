@@ -1,8 +1,11 @@
 
 import * as admin from 'firebase-admin';
+import * as functions from 'firebase-functions';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { setGlobalOptions } from 'firebase-functions/v2';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -281,4 +284,153 @@ export const onFixturesChangeSync = onDocumentWritten('leagueData/fixtures', asy
 // A scheduled function runs periodically as a fallback to ensure data is fresh.
 export const scheduledSync = onSchedule('every 2 minutes', async (event) => {
     await performSync();
+});
+
+// --- Web Scraping Environment ---
+
+const createScraper = (name: string, scrapeFunc: (roundHint?: number) => Promise<any[]>) => ({
+    name,
+    scrape: scrapeFunc,
+});
+
+const formatDate = (date: Date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${day}/${month}`;
+};
+
+const formatTime = (date: Date) => {
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+};
+
+const scrapeIFA = async (roundHint?: number): Promise<any[]> => {
+    console.log(`Attempting to scrape IFA with round hint: ${roundHint}`);
+    return [];
+};
+
+const scrapeSport5 = async (roundHint?: number): Promise<any[]> => {
+    console.log(`Attempting to scrape Sport5 with round hint: ${roundHint}`);
+    try {
+        const { data } = await axios.get('https://www.sport5.co.il/Games.aspx?FolderID=44&lang=HE');
+        const $ = cheerio.load(data);
+        const matches: any[] = [];
+
+        $('.table-games tr').each((i, row) => {
+            if (i === 0) return; 
+
+            try {
+                const columns = $(row).find('td');
+                if (columns.length > 5) {
+                    const roundText = $(columns[0]).text().trim();
+                    const homeTeam = $(columns[1]).text().trim();
+                    const awayTeam = $(columns[3]).text().trim();
+                    const score = $(columns[2]).text().trim();
+                    const date = $(columns[4]).text().trim(); 
+                    const time = $(columns[5]).text().trim(); 
+                    const stadium = $(columns[6]).text().trim();
+                    const status = "Scheduled"; 
+
+                    const round = parseInt(roundText, 10);
+                    
+                    if (roundHint && round !== roundHint) {
+                        return;
+                    }
+
+                    let hs = '';
+                    let as = '';
+                    if (score.includes('-')) {
+                        [hs, as] = score.split('-').map(s => s.trim());
+                    }
+
+                    matches.push({
+                        round,
+                        homeTeam,
+                        awayTeam,
+                        date,
+                        time,
+                        stadium,
+                        hs: hs || "",
+                        as: as || "",
+                        status: status,
+                    });
+                }
+            } catch(e: any) {
+                console.warn(`Failed to parse a row from Sport5`, { error: e.message });
+            }
+        });
+        return matches;
+    } catch (error: any) {
+        console.error("ScrapeSport5 failed:", { error: error.message });
+        return [];
+    }
+};
+
+const scrapeONE = async (roundHint?: number): Promise<any[]> => {
+    console.log(`Attempting to scrape ONE with round hint: ${roundHint}`);
+    return [];
+};
+
+const scrape365 = async (roundHint?: number): Promise<any[]> => {
+    console.log(`Attempting to scrape 365Scores with round hint: ${roundHint}`);
+    try {
+        const { data } = await axios.get('https://webws.365scores.com/web/games/current/?appTypeId=5&langId=2&timezoneName=Asia/Jerusalem&competitions=11');
+        const allGames = data.games || [];
+
+        let filteredGames = allGames;
+        if (roundHint) {
+            filteredGames = allGames.filter((game: any) => game.roundNum === roundHint);
+        }
+
+        return filteredGames.map((game: any) => {
+            const startTime = new Date(game.startTime);
+            return {
+                round: game.roundNum,
+                homeTeam: game.competitors[0]?.name || '',
+                awayTeam: game.competitors[1]?.name || '',
+                date: formatDate(startTime),
+                time: formatTime(startTime),
+                stadium: game.venue?.name || '',
+                hs: game.competitors[0]?.score >= 0 ? game.competitors[0].score : '',
+                as: game.competitors[1]?.score >= 0 ? game.competitors[1].score : '',
+                status: game.statusText || '',
+            };
+        });
+    } catch (error: any) {
+        console.error("Scrape365 failed:", { error: error.message });
+        return [];
+    }
+};
+
+export const fetchLiveFixtures = functions.https.onCall(async (data, context) => {
+    const { roundHint } = data;
+
+    const scrapers = [
+        createScraper('365Scores', scrape365),
+        createScraper('Sport5', scrapeSport5),
+        createScraper('IFA', scrapeIFA),
+        createScraper('ONE', scrapeONE),
+    ];
+
+    for (const scraper of scrapers) {
+        try {
+            console.log(`Trying scraper: ${scraper.name}`);
+            const result = await scraper.scrape(roundHint);
+
+            if (result && result.length > 0) {
+                console.log(`Scraper ${scraper.name} succeeded.`);
+                return { success: true, source: scraper.name, matches: result };
+            } else {
+                console.log(`Scraper ${scraper.name} returned no data.`);
+            }
+        } catch (error: any) {
+            console.warn(`Scraper ${scraper.name} failed.`, {
+                message: error.message,
+            });
+        }
+    }
+
+    console.error('All scrapers failed to fetch fixtures.');
+    throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
 });

@@ -129,7 +129,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
   const [globalLock, setGlobalLock] = useState<boolean>(false);
-  const [globalUnlock, setGlobalUnlock] = useState<boolean>(false); // 🟢 משתנה חדש לעקיפת שעון פתיחה כפויה
+  const [globalUnlock, setGlobalUnlock] = useState<boolean>(false);
   const [systemCurrentRound, setSystemCurrentRound] = useState<number>(1);
 
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
@@ -158,7 +158,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 setPlayoffRoundsInput(data.playoffRounds.join(', '));
             }
             if (data.globalLock !== undefined) setGlobalLock(data.globalLock);
-            if (data.globalUnlock !== undefined) setGlobalUnlock(data.globalUnlock); // 🟢 האזנה למצב פתיחה כפויה
+            if (data.globalUnlock !== undefined) setGlobalUnlock(data.globalUnlock);
             if (data.currentRound !== undefined) setSystemCurrentRound(data.currentRound);
         }
     });
@@ -176,7 +176,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         else setRealFixturesMatches([]);
     });
 
-    // 🟢 מאזין ל-Presence בזמן אמת עבור הרדאר 🟢
     const unsubPresence = onSnapshot(collection(db, 'presence'), (snap) => {
         const now = Date.now();
         const threeMinutesAgo = now - (3 * 60 * 1000);
@@ -213,24 +212,20 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
   const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => { setToast({msg, type}); if (type !== 'info') setTimeout(() => setToast(null), 5000); };
 
-  // 🟢 פונקציית הפעלת/כיבוי נעילה 🟢
   const toggleGlobalLock = async () => {
       setLoading(true);
       const newLockState = !globalLock;
       try {
-          // אם אנחנו נועלים, כדאי לכבות את הפתיחה הכפויה אם היא דולקת
           await setDoc(doc(db, 'leagueData', 'settings'), { globalLock: newLockState, globalUnlock: false }, { merge: true });
           showMessage(`✅ נעילת המחזור ${newLockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
       } catch (e) { showMessage('❌ שגיאה בעדכון מצב הנעילה', 'error'); }
       setLoading(false);
   };
 
-  // 🟢 פונקציית הפעלת/כיבוי פתיחה כפויה עוקפת שעון 🟢
   const toggleGlobalUnlock = async () => {
       setLoading(true);
       const newUnlockState = !globalUnlock;
       try {
-          // אם אנחנו פותחים בכוח, נכבה את הנעילה הגלובלית אם היא דולקת
           await setDoc(doc(db, 'leagueData', 'settings'), { globalUnlock: newUnlockState, globalLock: false }, { merge: true });
           showMessage(`✅ פתיחת מחזור (עוקף שעון) ${newUnlockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
       } catch (e) { showMessage('❌ שגיאה בעדכון מצב פתיחה', 'error'); }
@@ -544,31 +539,42 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
     finally { setLoading(false); }
   };
 
-  const runAIImageScanner = async (file: File) => {
-    setLoading(true); showMessage('סורק את הקובץ בעזרת AI... 👁️', 'info');
+  // 🤖 פונקציית האוטומציה החדשה ללוח המשחקים שמחליפה את ה-AI 🤖
+  const runAutoScanner = async () => {
+    setLoading(true); 
+    showMessage('שואב את לוח המשחקים המעודכן ביותר מהרשת... 🤖', 'info');
     try {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = async () => {
-            const base64Data = (reader.result as string).split(',')[1];
-            const extractedMatches = await analyzeMatchImage(base64Data, file.type, file.name, geminiApiKey);
-            if (extractedMatches && Array.isArray(extractedMatches)) {
-                extractedMatches.forEach((m: any) => { m.time = formatTimeWithUS(m.time); m.stadium = m.stadium || getStadium(m.homeTeam); });
-            }
-            if (extractedMatches && extractedMatches.length > 0) {
-                const realFixturesSnap = await getDoc(doc(db, 'leagueData', 'real_fixtures'));
-                let currentMatches = realFixturesSnap.exists() ? realFixturesSnap.data().matches : [];
-                const newMatches = [...currentMatches];
-                extractedMatches.forEach((m: any) => {
-                    const exists = newMatches.find(em => normalizeTeamName(em.homeTeam) === normalizeTeamName(m.homeTeam) && normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam) && em.round === m.round);
-                    if (!exists) newMatches.push(m);
-                });
-                await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() });
-                showMessage(`✅ סריקה הושלמה! נוספו ${newMatches.length - currentMatches.length} משחקים חדשים.`, 'success');
-            } else { showMessage('❌ לא נמצאו משחקים בקובץ.', 'error'); }
-            setLoading(false);
-        };
-    } catch (e: any) { showMessage('❌ שגיאה בסריקת קובץ: ' + e.message, 'error'); setLoading(false); }
+        const fetchFixturesFunc = httpsCallable(functions, 'fetchLiveFixtures');
+        const result: any = await fetchFixturesFunc({ roundHint: systemCurrentRound });
+        
+        if (result.data.success) {
+            const extractedMatches = result.data.matches;
+            
+            const realFixturesSnap = await getDoc(doc(db, 'leagueData', 'real_fixtures'));
+            let currentMatches = realFixturesSnap.exists() ? realFixturesSnap.data().matches : [];
+            const newMatches = [...currentMatches];
+            
+            extractedMatches.forEach((m: any) => {
+                // הוספת שעון ארצות הברית
+                m.time = formatTimeWithUS(m.time);
+                
+                const exists = newMatches.find(em => normalizeTeamName(em.homeTeam) === normalizeTeamName(m.homeTeam) && normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam) && em.round === m.round);
+                
+                if (exists) {
+                    Object.assign(exists, m);
+                } else {
+                    newMatches.push(m);
+                }
+            });
+
+            await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() });
+            showMessage(`✅ סריקה הושלמה בהצלחה (מקור: ${result.data.source})! ${extractedMatches.length} משחקים עודכנו.`, 'success');
+        }
+    } catch (e: any) { 
+        console.error(e);
+        showMessage('❌ שגיאה בסריקה: ' + e.message, 'error'); 
+    }
+    setLoading(false);
   };
 
   const saveManualMatchEdit = async () => {
@@ -857,7 +863,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                                 {loginLogs.map((log) => {
                                     const dateObj = new Date(log.timestamp);
                                     const isMobile = log.deviceType === 'Mobile';
-                                    const isOnline = onlineUsers.some(u => u.email === log.email || u.name === log.name); // בדיקה האם המשתמש מחובר עכשיו
+                                    const isOnline = onlineUsers.some(u => u.email === log.email || u.name === log.name);
                                     
                                     return (
                                         <tr key={log.id} className="hover:bg-slate-800/50 transition-colors group">
@@ -915,7 +921,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </button>
             </div>
 
-            {/* 🟢 בלוק חדש: שליטה בזמני המחזור 🟢 */}
+            {/* 🟢 בלוק: שליטה בזמני המחזור 🟢 */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
@@ -1085,62 +1091,29 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 </button>
             </div>
 
-            {/* 📸 סריקת משחקים ב-AI */}
+            {/* 🤖 סריקת משחקים אוטומטית (Web Scraping) */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-fuchsia-500/30 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-fuchsia-500/10 blur-[50px] pointer-events-none rounded-full"></div>
-              <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Camera className="text-fuchsia-500" /> סריקת לוח משחקים (AI)</h3>
+              <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Camera className="text-fuchsia-500" /> סריקת לוח משחקים (אוטומטית)</h3>
               <p className="text-slate-400 text-sm font-bold mb-6 relative z-10 leading-relaxed">
-                העלה קובץ PDF או צילום מסך של משחקי המחזור, או פשוט העתק תמונה (Ctrl+C) והדבק אותה ישירות לתוך התיבה למטה (Ctrl+V).<br/>
-                <span className="text-fuchsia-400">טיפ: שם הקובץ או הטקסט שתקליד בתיבה יעזור ל-AI להבין איזה מחזור זה!</span>
+                המערכת תסרוק אוטומטית את 365Scores, ערוץ הספורט ואתרי גיבוי נוספים כדי למשוך את שעות המשחקים ותוצאות הלייב של המחזור הנוכחי.
               </p>
               
-              <div className="flex flex-col md:flex-row gap-4 relative z-10">
-                <button onClick={() => document.getElementById('fixture-image-upload')?.click()} disabled={loading} className="w-full md:w-1/3 px-6 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-50 text-white font-black py-4 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 h-auto">
-                  <Sparkles className="w-5 h-5" /> העלה קובץ (תמונה/PDF)
+              <div className="flex justify-center relative z-10">
+                <button 
+                    onClick={runAutoScanner} 
+                    disabled={loading} 
+                    className="w-full md:w-1/2 px-6 bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-50 text-white font-black py-4 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"
+                >
+                    <Sparkles className="w-5 h-5" /> {loading ? 'שואב נתונים מהרשת...' : 'סנכרן מחזור אוטומטית ⚡'}
                 </button>
-
-                <input 
-                  type="file" 
-                  accept="image/*,application/pdf" 
-                  className="hidden" 
-                  id="fixture-image-upload" 
-                  onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                          runAIImageScanner(e.target.files[0]);
-                      }
-                  }} 
-                />
-
-                <textarea 
-                  className="flex-1 bg-black/30 border-2 border-dashed border-fuchsia-500/30 rounded-xl p-4 text-white placeholder-slate-500 outline-none focus:border-fuchsia-500 focus:bg-black/50 transition-all font-bold resize-none min-h-[60px]"
-                  placeholder="לחץ כאן והדבק תמונה (Ctrl+V) 📋 או הקלד רמז למחזור..."
-                  onPaste={(e) => {
-                      const items = e.clipboardData?.items;
-                      if (!items) return;
-                      for (let i = 0; i < items.length; i++) {
-                          if (items[i].type.indexOf('image') !== -1 || items[i].type.indexOf('pdf') !== -1) {
-                              const file = items[i].getAsFile();
-                              if (file) {
-                                  e.preventDefault();
-                                  const textValue = (e.target as HTMLTextAreaElement).value.trim();
-                                  const ext = file.type.includes('pdf') ? 'pdf' : 'png';
-                                  const hintName = textValue ? `${textValue}.${ext}` : `pasted_file_${Date.now()}.${ext}`;
-                                  
-                                  const renamedFile = new File([file], hintName, { type: file.type });
-                                  runAIImageScanner(renamedFile);
-                                  break;
-                              }
-                          }
-                      }
-                  }}
-                ></textarea>
               </div>
             </div>
 
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-emerald-500/30 shadow-xl relative overflow-hidden mt-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
                 <div className="relative z-10">
                     <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2"><Edit3 className="text-emerald-500" /> ניהול משחקים ידני</h3>
-                    <p className="text-slate-400 text-sm font-bold">ה-AI פספס משחק? תתקן או תוסיף ידנית בחלון ניהול ייעודי.</p>
+                    <p className="text-slate-400 text-sm font-bold">הבוט פספס משחק? תתקן או תוסיף ידנית בחלון ניהול ייעודי.</p>
                 </div>
                 <button onClick={() => setShowFixtureModal(true)} className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-2xl font-black transition-all active:scale-95 shadow-lg shrink-0 flex items-center justify-center gap-2 relative z-10">
                     <Edit3 className="w-5 h-5" /> פתח מנהל משחקים
