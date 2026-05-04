@@ -32,12 +32,19 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scheduledSync = exports.onFixturesChangeSync = exports.onUserChangeSync = void 0;
+exports.fetchLiveFixtures = exports.scheduledSync = exports.onFixturesChangeSync = exports.onUserChangeSync = void 0;
 const admin = __importStar(require("firebase-admin"));
+const functions = __importStar(require("firebase-functions"));
 const firestore_1 = require("firebase-functions/v2/firestore");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
+const https_1 = require("firebase-functions/v2/https"); // הוספנו את זה בשביל ה-CORS
 const v2_1 = require("firebase-functions/v2");
+const axios_1 = __importDefault(require("axios"));
+const cheerio = __importStar(require("cheerio"));
 admin.initializeApp();
 const db = admin.firestore();
 (0, v2_1.setGlobalOptions)({ region: 'us-central1' });
@@ -230,5 +237,140 @@ exports.onFixturesChangeSync = (0, firestore_1.onDocumentWritten)('leagueData/fi
 // A scheduled function runs periodically as a fallback to ensure data is fresh.
 exports.scheduledSync = (0, scheduler_1.onSchedule)('every 2 minutes', async (event) => {
     await performSync();
+});
+// --- Web Scraping Environment ---
+const createScraper = (name, scrapeFunc) => ({
+    name,
+    scrape: scrapeFunc,
+});
+const formatDate = (date) => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${day}/${month}`;
+};
+const formatTime = (date) => {
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+};
+const scrapeIFA = async (roundHint) => {
+    console.log(`Attempting to scrape IFA with round hint: ${roundHint}`);
+    return [];
+};
+const scrapeSport5 = async (roundHint) => {
+    console.log(`Attempting to scrape Sport5 with round hint: ${roundHint}`);
+    try {
+        const { data } = await axios_1.default.get('https://www.sport5.co.il/Games.aspx?FolderID=44&lang=HE');
+        const $ = cheerio.load(data);
+        const matches = [];
+        $('.table-games tr').each((i, row) => {
+            if (i === 0)
+                return;
+            try {
+                const columns = $(row).find('td');
+                if (columns.length > 5) {
+                    const roundText = $(columns[0]).text().trim();
+                    const homeTeam = $(columns[1]).text().trim();
+                    const awayTeam = $(columns[3]).text().trim();
+                    const score = $(columns[2]).text().trim();
+                    const date = $(columns[4]).text().trim();
+                    const time = $(columns[5]).text().trim();
+                    const stadium = $(columns[6]).text().trim();
+                    const status = "Scheduled";
+                    const round = parseInt(roundText, 10);
+                    if (roundHint && round !== roundHint) {
+                        return;
+                    }
+                    let hs = '';
+                    let as = '';
+                    if (score.includes('-')) {
+                        [hs, as] = score.split('-').map(s => s.trim());
+                    }
+                    matches.push({
+                        round,
+                        homeTeam,
+                        awayTeam,
+                        date,
+                        time,
+                        stadium,
+                        hs: hs || "",
+                        as: as || "",
+                        status: status,
+                    });
+                }
+            }
+            catch (e) {
+                console.warn(`Failed to parse a row from Sport5`, { error: e.message });
+            }
+        });
+        return matches;
+    }
+    catch (error) {
+        console.error("ScrapeSport5 failed:", { error: error.message });
+        return [];
+    }
+};
+const scrapeONE = async (roundHint) => {
+    console.log(`Attempting to scrape ONE with round hint: ${roundHint}`);
+    return [];
+};
+const scrape365 = async (roundHint) => {
+    console.log(`Attempting to scrape 365Scores with round hint: ${roundHint}`);
+    try {
+        const { data } = await axios_1.default.get('https://webws.365scores.com/web/games/current/?appTypeId=5&langId=2&timezoneName=Asia/Jerusalem&competitions=11');
+        const allGames = data.games || [];
+        let filteredGames = allGames;
+        if (roundHint) {
+            filteredGames = allGames.filter((game) => game.roundNum === roundHint);
+        }
+        return filteredGames.map((game) => {
+            const startTime = new Date(game.startTime);
+            return {
+                round: game.roundNum,
+                homeTeam: game.competitors[0]?.name || '',
+                awayTeam: game.competitors[1]?.name || '',
+                date: formatDate(startTime),
+                time: formatTime(startTime),
+                stadium: game.venue?.name || '',
+                hs: game.competitors[0]?.score >= 0 ? game.competitors[0].score : '',
+                as: game.competitors[1]?.score >= 0 ? game.competitors[1].score : '',
+                status: game.statusText || '',
+            };
+        });
+    }
+    catch (error) {
+        console.error("Scrape365 failed:", { error: error.message });
+        return [];
+    }
+};
+// הפונקציה החדשה והמעודכנת עם אישור CORS פתוח!
+exports.fetchLiveFixtures = (0, https_1.onCall)({ region: 'us-central1', cors: true }, async (request) => {
+    const { roundHint } = request.data;
+    const scrapers = [
+        createScraper('365Scores', scrape365),
+        createScraper('Sport5', scrapeSport5),
+        createScraper('IFA', scrapeIFA),
+        createScraper('ONE', scrapeONE),
+    ];
+    for (const scraper of scrapers) {
+        try {
+            console.log(`Trying scraper: ${scraper.name}`);
+            const result = await scraper.scrape(roundHint);
+            if (result && result.length > 0) {
+                console.log(`Scraper ${scraper.name} succeeded.`);
+                return { success: true, source: scraper.name, matches: result };
+            }
+            else {
+                console.log(`Scraper ${scraper.name} returned no data.`);
+            }
+        }
+        catch (error) {
+            console.warn(`Scraper ${scraper.name} failed.`, {
+                message: error.message,
+            });
+        }
+    }
+    console.error('All scrapers failed to fetch fixtures.');
+    throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
 });
 //# sourceMappingURL=index.js.map
