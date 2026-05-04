@@ -7,7 +7,6 @@ import { httpsCallable } from 'firebase/functions';
 import { UserRole } from '../types';
 import html2canvas from 'html2canvas';
 
-// --- PRO FIX: הפיכת הנתונים לאופציונליים כדי לפתור את השגיאה בסטודיו ---
 interface LiveArenaProps { teams?: any[]; currentRound?: number; isModerator?: boolean; loggedInUser?: any; isAdmin?: boolean; }
 
 const TEAM_NAMES: Record<string, string> = { tumali: 'תומאלי', tampa: 'טמפה', pichichi: "פיצ'יצ'י", hamsili: 'חמסילי', harale: 'חראלה', holonia: 'חולוניה' };
@@ -89,24 +88,21 @@ const getFormation = (lineup: any[]) => {
     return `${def}-${mid}-${fwd}`;
 };
 
-// --- PRO FIX: מתן ערכי ברירת מחדל כדי למנוע קריסות (teams = [], currentRound = 0) ---
 const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isModerator, loggedInUser, isAdmin }) => {
   
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
   const [h2hModal, setH2hModal] = useState<{hId: string, aId: string} | null>(null);
-  
   const [auditModal, setAuditModal] = useState<{hId: string, aId: string} | null>(null);
   const [auditActiveTab, setAuditActiveTab] = useState<'h' | 'a'>('h');
   const [auditGroupByReal, setAuditGroupByReal] = useState(false);
-
   const [untouchedModal, setUntouchedModal] = useState<{teamId: string, teamName: string} | null>(null);
-
   const [isProcessingRound, setIsProcessingRound] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<{teamId: string, player: any} | null>(null);
+  
   const [stats, setStats] = useState({ 
-    started: false, played60: false, notInSquad: false, won: false, 
+    started: false, played60: false, notInSquad: false, notPlayedIn16: false, won: false, 
     goals: 0, assists: 0, cleanSheet: false, conceded: 0, 
     yellow: false, secondYellow: false, red: false, 
     penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, 
@@ -139,9 +135,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
           lastSeen: serverTimestamp(),
           teamName: loggedInUser.teamName
         }, { merge: true });
-      } catch (e) {
-        console.error("Error updating presence:", e);
-      }
+      } catch (e) { console.error("Error updating presence:", e); }
     };
     updatePresence();
     const interval = setInterval(updatePresence, 30000);
@@ -152,7 +146,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
       const active = snap.docs
         .map(d => ({ id: d.id, ...d.data() } as any))
         .filter(user => user.lastSeen?.toMillis() > threeMinutesAgo);
-        
       const uniqueActiveByName = Array.from(new Map(active.map(u => [u.name, u])).values());
       setOnlineUsers(uniqueActiveByName);
     });
@@ -226,11 +219,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
   const getTeamLiveEvents = (teamId: string) => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return { goals: 0, yellows: 0, reds: 0 };
-    
-    let goals = 0;
-    let yellows = 0;
-    let reds = 0;
-
+    let goals = 0, yellows = 0, reds = 0;
     const currentLineup = applySubstitutionsToLineup(team);
     
     currentLineup.forEach((player: any) => {
@@ -246,7 +235,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
     roundSubs.forEach((sub: any) => {
         const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
         const benchedPlayerOut = allPossibleOutPlayers.find((p: any) => p.name === sub.playerOut);
-        
         if (benchedPlayerOut && benchedPlayerOut.stats) {
             goals += (benchedPlayerOut.stats.goals || 0);
             if (benchedPlayerOut.stats.yellow) yellows += 1;
@@ -254,7 +242,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
             if (benchedPlayerOut.stats.red) reds += 1;
         }
     });
-
     return { goals, yellows, reds };
   };
 
@@ -262,10 +249,16 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
       const team = teams.find(t => t.id === teamId);
       if (!team) return 0;
       const currentLineup = applySubstitutionsToLineup(team);
+      const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+      const subInNames = roundSubs.map((s:any) => s.playerIn);
+
       let count = 0;
       currentLineup.forEach((p: any) => {
           const hasPlayed = (p.stats && Object.values(p.stats).some(v => v === true || (typeof v === 'number' && v > 0))) || (Number(p.points) !== 0);
-          if (!hasPlayed && Number(p.points) === 0) count++;
+          if (!hasPlayed && Number(p.points) === 0) {
+              if (subInNames.includes(p.name)) count += 0.5;
+              else count += 1;
+          }
       });
       return count;
   };
@@ -273,56 +266,38 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
   const calculateTeamScore = (teamId: string) => {
     const team = teams.find(t => t.id === teamId);
     if (!team) return 0;
-    
     let total = 0;
-    
     const currentLineup = applySubstitutionsToLineup(team);
-    if (currentLineup) {
-        total += currentLineup.reduce((sum: number, p: any) => sum + (Number(p.points) || 0), 0);
-    }
+    if (currentLineup) total += currentLineup.reduce((sum: number, p: any) => sum + (Number(p.points) || 0), 0);
     
     const roundSubs = (team.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
-    
     roundSubs.forEach((sub: any) => {
         const allPossibleOutPlayers = [...(team.published_subs_out || []), ...(team.squad || []), ...(team.players || [])];
         const benchedPlayerOut = allPossibleOutPlayers.find((p: any) => p.name === sub.playerOut);
-        
-        if (benchedPlayerOut) {
-            total += (Number(benchedPlayerOut.points) || 0);
-        }
+        if (benchedPlayerOut) total += (Number(benchedPlayerOut.points) || 0);
     });
-    
     return total;
   };
 
   const shareArenaAsImage = async () => {
     const el = document.getElementById('arena-capture-area');
     if (!el) return;
-
     showToast('מייצר תמונה ברמת ליגת האלופות... 📸', 'info');
-
     let shareText = `🏆 תוצאות הלייב בזירת פנטזי לוזון 13 - מחזור ${currentRound}! 🔥`;
 
     try {
       const canvas = await html2canvas(el, { 
-        backgroundColor: '#0f172a', 
-        scale: 2, 
-        useCORS: true,
+        backgroundColor: '#0f172a', scale: 2, useCORS: true,
         onclone: (clonedDoc) => {
           clonedDoc.querySelectorAll('.backdrop-blur-md, .backdrop-blur-xl, .backdrop-blur-2xl').forEach(b => {
               b.classList.remove('backdrop-blur-md', 'backdrop-blur-xl', 'backdrop-blur-2xl');
               (b as HTMLElement).style.backgroundColor = '#0f172a';
           });
           clonedDoc.querySelectorAll('span, p, h2, h3, h4, div').forEach(node => {
-              const n = node as HTMLElement;
-              n.style.lineHeight = '1.5';
-              n.style.paddingBottom = '4px';
+              const n = node as HTMLElement; n.style.lineHeight = '1.5'; n.style.paddingBottom = '4px';
           });
           clonedDoc.querySelectorAll('.truncate').forEach(node => {
-              const n = node as HTMLElement;
-              n.classList.remove('truncate');
-              n.style.whiteSpace = 'normal';
-              n.style.overflow = 'visible';
+              const n = node as HTMLElement; n.classList.remove('truncate'); n.style.whiteSpace = 'normal'; n.style.overflow = 'visible';
           });
           clonedDoc.querySelectorAll('[data-html2canvas-ignore="true"]').forEach(ig => (ig as HTMLElement).style.display = 'none');
         }
@@ -330,39 +305,19 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
       canvas.toBlob(async (blob) => {
         if (!blob) return;
         const file = new File([blob], `Arena_Round_${currentRound}.png`, { type: 'image/png' });
-
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: `תוצאות זירה - מחזור ${currentRound}`,
-            text: shareText.trim()
-          });
+          await navigator.share({ files: [file], title: `תוצאות זירה - מחזור ${currentRound}`, text: shareText.trim() });
           setAppAlert(null);
         } else {
           try {
-            const textArea = document.createElement("textarea");
-            textArea.value = shareText.trim();
-            document.body.appendChild(textArea);
-            textArea.select();
-            document.execCommand("copy");
-            document.body.removeChild(textArea);
-            
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `Arena_Round_${currentRound}.png`;
-            link.click();
-            
+            const textArea = document.createElement("textarea"); textArea.value = shareText.trim();
+            document.body.appendChild(textArea); textArea.select(); document.execCommand("copy"); document.body.removeChild(textArea);
+            const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `Arena_Round_${currentRound}.png`; link.click();
             showToast('התמונה ירדה! הטקסט הועתק, הדבק (Ctrl+V) ב-WhatsApp Web 📋', 'success');
-          } catch (err) {
-            console.error(err);
-            showToast('שגיאה בשיתוף', 'error');
-          }
+          } catch (err) { showToast('שגיאה בשיתוף', 'error'); }
         }
       }, 'image/png');
-    } catch (err) {
-      console.error(err);
-      showToast('שגיאה ביצירת התמונה', 'error');
-    }
+    } catch (err) { showToast('שגיאה ביצירת התמונה', 'error'); }
   };
 
   const exportArenaToExcel = () => {
@@ -370,31 +325,20 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
     if (currentMatches.length === 0) return setAppAlert({title: 'שגיאה', msg: 'אין נתונים לייצוא למחזור הנוכחי', type: 'error'});
 
     let csvContent = `סיכום זירה - מחזור ${currentRound}\n\n`;
-
     currentMatches.forEach((match: any) => {
-      const hName = TEAM_NAMES[match.h] || match.h;
-      const aName = TEAM_NAMES[match.a] || match.a;
-      const hScore = calculateTeamScore(match.h);
-      const aScore = calculateTeamScore(match.a);
-      
-      const hTeam = teams.find(t => t.id === match.h);
-      const aTeam = teams.find(t => t.id === match.a);
-      
-      const hLineup = applySubstitutionsToLineup(hTeam);
-      const aLineup = applySubstitutionsToLineup(aTeam);
-
-      const hFormation = getFormation(hLineup);
-      const aFormation = getFormation(aLineup);
+      const hName = TEAM_NAMES[match.h] || match.h; const aName = TEAM_NAMES[match.a] || match.a;
+      const hScore = calculateTeamScore(match.h); const aScore = calculateTeamScore(match.a);
+      const hTeam = teams.find(t => t.id === match.h); const aTeam = teams.find(t => t.id === match.a);
+      const hLineup = applySubstitutionsToLineup(hTeam); const aLineup = applySubstitutionsToLineup(aTeam);
+      const hFormation = getFormation(hLineup); const aFormation = getFormation(aLineup);
 
       csvContent += `=== ${hName} ===,${hScore},VS,${aScore},=== ${aName} ===\n`;
       csvContent += `מערך: ${hFormation},,,,מערך: ${aFormation}\n`;
       csvContent += `שחקן (עמדה),נקודות,,שחקן (עמדה),נקודות\n`;
       
       for (let i = 0; i < Math.max(hLineup.length, aLineup.length); i++) {
-          const hP = hLineup[i] ? `${hLineup[i].name} (${hLineup[i].position})` : '-';
-          const hPts = hLineup[i] ? hLineup[i].points || 0 : '-';
-          const aP = aLineup[i] ? `${aLineup[i].name} (${aLineup[i].position})` : '-';
-          const aPts = aLineup[i] ? aLineup[i].points || 0 : '-';
+          const hP = hLineup[i] ? `${hLineup[i].name} (${hLineup[i].position})` : '-'; const hPts = hLineup[i] ? hLineup[i].points || 0 : '-';
+          const aP = aLineup[i] ? `${aLineup[i].name} (${aLineup[i].position})` : '-'; const aPts = aLineup[i] ? aLineup[i].points || 0 : '-';
           csvContent += `${hP},${hPts},,${aP},${aPts}\n`;
       }
       csvContent += `\n------------------------------------------------------------\n\n`;
@@ -404,18 +348,13 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
     const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Luzon13_Matchday_${currentRound}_Detailed.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    link.setAttribute("href", url); link.setAttribute("download", `Luzon13_Matchday_${currentRound}_Detailed.csv`);
+    link.style.visibility = 'hidden'; document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
   const processCSVText = async (text: string) => {
     const rows = text.split('\n').map(parseCsvRow);
-    let updatedTeams: string[] = [];
-    let missingTeams: string[] = [];
+    let updatedTeams: string[] = []; let missingTeams: string[] = [];
 
     for (const team of teams) {
       if (!team.squad || team.squad.length === 0) continue;
@@ -435,37 +374,26 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
       }
 
       if (teamRowIdx !== -1) {
-        const startingLineup: any[] = [];
-        const bench: any[] = [];
-        const foundPlayerIds = new Set();
-        const roundSubsToCreate: any[] = []; 
-        let teamPointsSum = 0;
-        let mode = 'starters';
+        const startingLineup: any[] = []; const bench: any[] = []; const foundPlayerIds = new Set();
+        const roundSubsToCreate: any[] = []; let teamPointsSum = 0; let mode = 'starters';
         const endRowIdx = Math.min(teamRowIdx + 25, rows.length);
 
         const findMatchOrCreate = (nameStr: string, posHint: string) => {
-          if (!nameStr) return null;
-          const cleanName = cleanStr(nameStr);
-          if (cleanName.length < 2) return null;
+          if (!nameStr) return null; const cleanName = cleanStr(nameStr); if (cleanName.length < 2) return null;
           let matchedPlayer = team.squad.find((p: any) => {
-             if (foundPlayerIds.has(p.id)) return false;
-             const pNameClean = cleanStr(p.name);
+             if (foundPlayerIds.has(p.id)) return false; const pNameClean = cleanStr(p.name);
              return cleanName === pNameClean || cleanName.includes(pNameClean) || pNameClean.includes(cleanName);
           });
           if (!matchedPlayer) {
               let pos = 'קשר';
-              if (posHint.includes('שוער')) pos = 'שוער';
-              if (posHint.includes('הגנה') || posHint.includes('בלם')) pos = 'הגנה';
-              if (posHint.includes('חלוץ') || posHint.includes('התקפה')) pos = 'חלוץ';
+              if (posHint.includes('שוער')) pos = 'שוער'; if (posHint.includes('הגנה') || posHint.includes('בלם')) pos = 'הגנה'; if (posHint.includes('חלוץ') || posHint.includes('התקפה')) pos = 'חלוץ';
               matchedPlayer = { id: 'ghost_' + Math.random().toString(36).substr(2, 9), name: nameStr.trim(), position: pos, team: posHint.trim() || 'Unknown', points: 0 };
           }
           return matchedPlayer;
         };
 
         for (let r = teamRowIdx + 1; r < endRowIdx; r++) {
-          const row = rows[r];
-          if (!row || row.length < 4) continue;
-          
+          const row = rows[r]; if (!row || row.length < 4) continue;
           const col1 = cleanStr(row[1]); const col2 = cleanStr(row[2]); 
           if (col1.includes('סיכום') || col2.includes('סיכום')) break;
           if (col1.includes('חילופים') || col2.includes('חילופים') || col2.includes('מוחלף')) { mode = 'subs'; continue; }
@@ -473,25 +401,19 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
           let pts = 0;
           for (let c = row.length - 1; c >= 4; c--) {
               const val = row[c]?.trim();
-              if (val !== '' && !isNaN(Number(val))) {
-                  pts = Number(val);
-                  break; 
-              }
+              if (val !== '' && !isNaN(Number(val))) { pts = Number(val); break; }
           }
 
           if (mode === 'starters') {
             const playerObj = findMatchOrCreate(row[3], row[2]);
             if (playerObj) {
-              const playerWithPoints = { ...playerObj, points: pts };
-              teamPointsSum += pts;
-              if (startingLineup.length < 11) startingLineup.push(playerWithPoints);
-              else bench.push(playerWithPoints);
+              const playerWithPoints = { ...playerObj, points: pts }; teamPointsSum += pts;
+              if (startingLineup.length < 11) startingLineup.push(playerWithPoints); else bench.push(playerWithPoints);
               foundPlayerIds.add(playerObj.id);
             }
           } else if (mode === 'subs') {
             const playerOutName = row[2]; const playerInName = row[3]; 
             if (!playerOutName || !playerInName || cleanStr(playerOutName).length < 2) continue;
-            
             const pInObj = findMatchOrCreate(playerInName, '');
             if (pInObj) {
               const inPlayerWithPoints = { ...pInObj, points: pts }; 
@@ -499,15 +421,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                  const pClean = cleanStr(p.name); const oClean = cleanStr(playerOutName);
                  return oClean === pClean || oClean.includes(pClean) || pClean.includes(oClean);
               });
-              
               let actualOutName = playerOutName;
               if (outIndex !== -1) {
                 const actualOutPlayer = startingLineup.splice(outIndex, 1)[0];
                 bench.push(actualOutPlayer); actualOutName = actualOutPlayer.name;
               }
-              
-              startingLineup.push(inPlayerWithPoints);
-              foundPlayerIds.add(pInObj.id);
+              startingLineup.push(inPlayerWithPoints); foundPlayerIds.add(pInObj.id);
               roundSubsToCreate.push({ id: `sub_${Date.now()}_${Math.random().toString(36).substring(2,9)}`, type: 'HALFTIME_SUB', round: currentRound, playerIn: pInObj.name, playerOut: actualOutName, status: 'ACTIVE', timestamp: new Date().toISOString() });
             }
           }
@@ -553,7 +472,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
   useEffect(() => {
     if (editingPlayer) {
       setStats(editingPlayer.player.stats || {
-        started: false, played60: false, notInSquad: false, won: false, 
+        started: false, played60: false, notInSquad: false, notPlayedIn16: false, won: false, 
         goals: 0, assists: 0, cleanSheet: false, conceded: 0, 
         yellow: false, secondYellow: false, red: false, 
         penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, 
@@ -563,7 +482,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
   }, [editingPlayer]);
 
   const calculatePointsFromStats = (statsObj: any, pos: string) => {
-      let p = 0; if (!statsObj) return 0; if (statsObj.notInSquad) return -1;
+      let p = 0; if (!statsObj) return 0; 
+      if (statsObj.notInSquad) return -1; 
+      if (statsObj.notPlayedIn16) return 0; 
+
       const isGk = ['GK', 'שוער'].includes(pos); const isDef = ['DEF', 'הגנה', 'בלם', 'מגן'].includes(pos);
       
       if (statsObj.started) p += 1; 
@@ -585,12 +507,14 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
         const newStats = { ...prevStats, [field]: value };
         if (field === 'conceded' && value > 0) newStats.cleanSheet = false;
         if (field === 'cleanSheet' && value === true) newStats.conceded = 0;
+        if (field === 'notInSquad' && value === true) newStats.notPlayedIn16 = false;
+        if (field === 'notPlayedIn16' && value === true) newStats.notInSquad = false;
         return newStats;
     }); 
   };
 
   const resetPlayerStats = () => {
-    setStats({ started: false, played60: false, notInSquad: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 });
+    setStats({ started: false, played60: false, notInSquad: false, notPlayedIn16: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 });
   };
 
   const savePlayerPoints = async () => {
@@ -604,74 +528,21 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
       const finalPoints = calculatePointsFromStats(stats, editingPlayer.player.position);
       
       const updatePlayerInList = (list: any[]) => (list || []).map((p: any) => 
-        (p.id === editingPlayer.player.id || p.name === editingPlayer.player.name) 
-          ? { ...p, points: finalPoints, stats: stats } 
-          : p
+        (p.id === editingPlayer.player.id || p.name === editingPlayer.player.name) ? { ...p, points: finalPoints, stats: stats } : p
       );
       
       const updatedLineup = updatePlayerInList(freshTeam.published_lineup || []);
       const updatedSubsOut = updatePlayerInList(freshTeam.published_subs_out || []);
       const updatedSquad = updatePlayerInList(freshTeam.squad || []);
 
-      // 🟢 תיעוד ביומן ה-VAR של הקבוצה 🟢
       const editLog = {
-          id: `var_${Date.now()}`,
-          type: 'VAR_POINTS_UPDATE',
-          round: currentRound,
-          playerIn: editingPlayer.player.name,
-          playerOut: `${finalPoints} נק'`,
-          actionBy: loggedInUser?.name || 'מנהל',
-          timestamp: new Date().toISOString()
+          id: `var_${Date.now()}`, type: 'VAR_POINTS_UPDATE', round: currentRound, playerIn: editingPlayer.player.name, playerOut: `${finalPoints} נק'`, actionBy: loggedInUser?.name || 'מנהל', timestamp: new Date().toISOString()
       };
       
-      await updateDoc(teamRef, { 
-          published_lineup: updatedLineup, 
-          published_subs_out: updatedSubsOut, 
-          squad: updatedSquad,
-          lineup: updatedLineup,
-          players: updatedSquad,
-          transfers: arrayUnion(editLog)
-      });
+      await updateDoc(teamRef, { published_lineup: updatedLineup, published_subs_out: updatedSubsOut, squad: updatedSquad, lineup: updatedLineup, players: updatedSquad, transfers: arrayUnion(editLog) });
       setEditingPlayer(null);
       showToast('ניקוד נשמר ודוח ה-VAR עודכן!', 'success');
     } catch (e) { setAppAlert({title:'שגיאה', msg: 'שגיאה בעדכון נקודות', type: 'error'}); }
-  };
-
-  const generateRazZahaviSummary = (matchesData: any[]) => {
-    const titles = [
-      "שערורייה! פסטיבל! לוזון ליג בשיא העוצמה!", 
-      "קונצרט של כדורגל וניהול כושל! בואו נדבר תכלס!", 
-      "צחנה או שירה בתנועה? המחזור שטרף את הקלפים!", 
-      "הפטריוטים של הפנטזי: ינון מגל היה בוכה מהמחזור הזה!"
-    ];
-    let text = `🚨 **${titles[Math.floor(Math.random() * titles.length)]}** 🚨\n\n`;
-    text += `כאן רז זהבי, ואני אומר לכם שהמחזור הזה של פנטזי לוזון השאיר לי צפצופים באוזניים! איזה מנג'רים, איזו רמה! בואו נצלול למה שהיה על הדשא:\n\n`;
-    
-    const tightHomeWins = ["איזה קרב אדיר!", "משחק צמוד עם סכינים בין השיניים!", "המגרש רעד, אבל הבית שמר על הבית.", "ניצחון בשיניים, שלוש נקודות של אופי."];
-    const tightAwayWins = ["עקיצה של אלופים!", "גניבה לאור יום!", "אורחת לא מנומסת בעליל שלוקחת את כל הקופה.", "משחק חוץ אכזרי אבל יעיל."];
-    
-    matchesData.forEach((m) => {
-      const diff = Math.abs(m.homeScore - m.awayScore);
-      if (m.homeScore > m.awayScore) {
-        if (diff >= 20) {
-          text += `💥 **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\nמעוכה! קונצרט! ${m.hName} עשתה שמות ב${m.aName}, פירקה אותה ב-${diff} הפרש ולקחה 3 נקודות של דורסנות.\n\n`;
-        } else {
-          const randText = tightHomeWins[Math.floor(Math.random() * tightHomeWins.length)];
-          text += `⚔️ **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\n${randText} ${m.hName} גירדה פה 2 נקודות סופר חשובות.\n\n`;
-        }
-      } else if (m.awayScore > m.homeScore) {
-        if (diff >= 20) {
-          text += `🔥 **${m.aName} - ${m.hName} (${m.awayScore}:${m.homeScore})**\nשוד ושבר בקופות! ${m.aName} באה לזירת החוץ ופשוט דרסה. 3 נקודות קל למנג'ר הגאון.\n\n`;
-        } else {
-          const randText = tightAwayWins[Math.floor(Math.random() * tightAwayWins.length)];
-          text += `🎯 **${m.aName} - ${m.hName} (${m.awayScore}:${m.homeScore})**\n${randText} ${m.aName} לוקחת פה 2 נקודות חוץ יקרות מפז.\n\n`;
-        }
-      } else {
-        text += `🤝 **${m.hName} - ${m.aName} (${m.homeScore}:${m.awayScore})**\nחלוקת נקודות חסרת מעוף. נקודה אחת לכל אחת ויאללה הביתה.\n\n`;
-      }
-    });
-    text += `הטבלה רותחת, הפערים מצטמצמים, והמחזור הבא כבר מעבר לפינה. אל תלכו לשום מקום! 🍿`;
-    return text;
   };
 
   const executeCloseRound = async () => {
@@ -679,118 +550,72 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
     setIsProcessingRound(true);
     try {
       const backupData = {
-        roundToRestore: currentRound,
-        timestamp: new Date().toISOString(),
-        teamsSnapshot: JSON.parse(JSON.stringify(teams)),
-        fixturesSnapshot: JSON.parse(JSON.stringify(fixtures)),
-        generatedPostIds: [] as string[]
+        roundToRestore: currentRound, timestamp: new Date().toISOString(), teamsSnapshot: JSON.parse(JSON.stringify(teams)), fixturesSnapshot: JSON.parse(JSON.stringify(fixtures)), generatedPostIds: [] as string[]
       };
-
-      const emptyStats = { started: false, played60: false, notInSquad: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 };
-
-      const matchesDataForSummary: any[] = [];
-      const excelSyncRows: any[] = []; 
+      const emptyStats = { started: false, played60: false, notInSquad: false, notPlayedIn16: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 };
+      const matchesDataForSummary: any[] = []; const excelSyncRows: any[] = []; 
 
       for (const match of currentMatches) {
-        const homeScore = calculateTeamScore(match.h);
-        const awayScore = calculateTeamScore(match.a);
+        const homeScore = calculateTeamScore(match.h); const awayScore = calculateTeamScore(match.a);
         matchesDataForSummary.push({ hName: TEAM_NAMES[match.h] || match.h, aName: TEAM_NAMES[match.a] || match.a, homeScore, awayScore });
 
         let hPts = 0, aPts = 0, hW = 0, hD = 0, hL = 0, aW = 0, aD = 0, aL = 0;
-        if (homeScore > awayScore) { hPts = (homeScore - awayScore >= 20) ? 3 : 2; hW = 1; aL = 1; } 
-        else if (awayScore > homeScore) { aPts = (awayScore - homeScore >= 20) ? 3 : 2; aW = 1; hL = 1; } 
-        else { hPts = 1; aPts = 1; hD = 1; aD = 1; }
+        let hResult = 'D', aResult = 'D';
+
+        if (homeScore > awayScore) { hPts = (homeScore - awayScore >= 20) ? 3 : 2; hW = 1; aL = 1; hResult = 'W'; aResult = 'L'; } 
+        else if (awayScore > homeScore) { aPts = (awayScore - homeScore >= 20) ? 3 : 2; aW = 1; hL = 1; hResult = 'L'; aResult = 'W'; } 
+        else { hPts = 1; aPts = 1; hD = 1; aD = 1; hResult = 'D'; aResult = 'D'; }
 
         const hTeam = teams.find(t => t.id === match.h); const aTeam = teams.find(t => t.id === match.a);
 
         if(hTeam) {
           const hLineupForExcel = applySubstitutionsToLineup(hTeam);
           hLineupForExcel.forEach((player: any) => {
-            excelSyncRows.push({
-                syncId: `R${currentRound}_${hTeam.id}_${player.id}`,
-                date: new Date().toISOString().split('T')[0],
-                round: currentRound,
-                fantasyTeam: TEAM_NAMES[hTeam.id] || hTeam.id,
-                player: player.name,
-                points: player.points || 0
-            });
+            excelSyncRows.push({ syncId: `R${currentRound}_${hTeam.id}_${player.id}`, date: new Date().toISOString().split('T')[0], round: currentRound, fantasyTeam: TEAM_NAMES[hTeam.id] || hTeam.id, player: player.name, points: player.points || 0 });
           });
-
           const resetSquad = (hTeam.squad || []).map((p:any) => ({...p, points: 0, stats: emptyStats}));
-          await updateDoc(doc(db, 'users', hTeam.id), { points: (hTeam.points || 0) + hPts, gf: (hTeam.gf || 0) + homeScore, ga: (hTeam.ga || 0) + awayScore, wins: (hTeam.wins || 0) + hW, draws: (hTeam.draws || 0) + hD, losses: (hTeam.losses || 0) + hL, played: (hTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad });
+          const newHForm = [...(hTeam.form || []), hResult].slice(-5);
+          await updateDoc(doc(db, 'users', hTeam.id), { points: (hTeam.points || 0) + hPts, gf: (hTeam.gf || 0) + homeScore, ga: (hTeam.ga || 0) + awayScore, wins: (hTeam.wins || 0) + hW, draws: (hTeam.draws || 0) + hD, losses: (hTeam.losses || 0) + hL, played: (hTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad, form: newHForm });
         }
 
         if(aTeam) {
           const aLineupForExcel = applySubstitutionsToLineup(aTeam);
           aLineupForExcel.forEach((player: any) => {
-            excelSyncRows.push({
-                syncId: `R${currentRound}_${aTeam.id}_${player.id}`,
-                date: new Date().toISOString().split('T')[0],
-                round: currentRound,
-                fantasyTeam: TEAM_NAMES[aTeam.id] || aTeam.id,
-                player: player.name,
-                points: player.points || 0
-            });
+            excelSyncRows.push({ syncId: `R${currentRound}_${aTeam.id}_${player.id}`, date: new Date().toISOString().split('T')[0], round: currentRound, fantasyTeam: TEAM_NAMES[aTeam.id] || aTeam.id, player: player.name, points: player.points || 0 });
           });
-
           const resetSquad = (aTeam.squad || []).map((p:any) => ({...p, points: 0, stats: emptyStats}));
-          await updateDoc(doc(db, 'users', aTeam.id), { points: (aTeam.points || 0) + aPts, gf: (aTeam.gf || 0) + awayScore, ga: (aTeam.ga || 0) + homeScore, wins: (aTeam.wins || 0) + aW, draws: (aTeam.draws || 0) + aD, losses: (aTeam.losses || 0) + aL, played: (aTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad });
+          const newAForm = [...(aTeam.form || []), aResult].slice(-5);
+          await updateDoc(doc(db, 'users', aTeam.id), { points: (aTeam.points || 0) + aPts, gf: (aTeam.gf || 0) + awayScore, ga: (aTeam.ga || 0) + homeScore, wins: (aTeam.wins || 0) + aW, draws: (aTeam.draws || 0) + aD, losses: (aTeam.losses || 0) + aL, played: (aTeam.played || 0) + 1, published_lineup: [], published_subs_out: resetSquad, lineup: [], squad: resetSquad, form: newAForm });
         }
       }
 
-      // --- סנכרון לאקסל ---
       try {
           const TARGET_SPREADSHEET_ID = '1_tq9_QMdifGLHzw-cZVJGYRsUZ-5R5RkCyXHzkoMHS8'; 
           const syncMatchToExcelFunc = httpsCallable(functions, 'syncMatchToExcel');
           await syncMatchToExcelFunc({ rows: excelSyncRows, spreadsheetId: TARGET_SPREADSHEET_ID });
           console.log('✅ Data synced to Google Sheets successfully!');
-      } catch (excelError) {
-          console.error('❌ Failed to sync to Google Sheets:', excelError);
-      }
-      // --- סוף סנכרון לאקסל ---
+      } catch (excelError) { console.error('❌ Failed to sync to Google Sheets:', excelError); }
 
-      const activeApiKey = process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
-
+      const activeApiKey = import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
       if (activeApiKey) {
         try {
           const ai = new GoogleGenAI({ apiKey: activeApiKey });
-          const prompt = `אתה אנליסט כדורגל ופנטזי בכיר וחד. כתוב פוסט סיכום מקצועי ומעמיק למחזור ${currentRound} של ליגת "פנטזי לוזון 13".
-          אלו תוצאות המשחקים של המחזור שהסתיים:
-          ${matchesDataForSummary.map(m => `${m.hName} ${m.homeScore} - ${m.awayScore} ${m.aName}`).join('\n')}
-
-          הנחיות קריטיות:
-          - כתוב פוסט מרתק, מקצועי, עם ניתוח קצר לכל משחק. למה קבוצה אחת ניצחה? (תמציא סיבות מקצועיות ומשעשעות שקשורות לכדורגל, למשל: "הגנה מברזל", "חילופים מבריקים", "קריסה במחצית", "מומנטום מטורף").
-          - אל תהיה רובוטי. אל תחזור על תבניות. חשוב שזה ייראה כמו ניתוח אמיתי.
-          - השתמש באימוג'ים מתאימים.
-          - ללא תגיות מיוחדות כמו # או כוכביות.
-          - הפוסט יפורסם ברשת חברתית פנימית של הליגה, תתנהג כמו פרשן שמוביל את השיח.`;
-
-          const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: [{ parts: [{ text: prompt }] }]
-          });
-
+          const prompt = `אתה אנליסט כדורגל ופנטזי בכיר וחד. כתוב פוסט סיכום מקצועי ומעמיק למחזור ${currentRound} של ליגת "פנטזי לוזון 13". אלו תוצאות המשחקים של המחזור שהסתיים: ${matchesDataForSummary.map(m => `${m.hName} ${m.homeScore} - ${m.awayScore} ${m.aName}`).join('\n')} הנחיות קריטיות: - כתוב פוסט מרתק, מקצועי, עם ניתוח קצר לכל משחק. למה קבוצה אחת ניצחה? - אל תהיה רובוטי. אל תחזור על תבניות. - השתמש באימוג'ים מתאימים. - ללא תגיות מיוחדות כמו # או כוכביות. - הפוסט יפורסם ברשת חברתית פנימית של הליגה, תתנהג כמו פרשן שמוביל את השיח.`;
+          const response = await ai.models.generateContent({ model: "gemini-1.5-flash-latest", contents: [{ parts: [{ text: prompt }] }] });
           const aiText = response.text;
           if (aiText) {
-              const aiPostRef = await addDoc(collection(db, 'social_posts'), {
-                authorName: 'האנליסט AI 🤖', handle: '@luzon_analyst', teamId: 'system', isVerified: true, type: 'article', content: aiText, likes: Math.floor(Math.random() * 20) + 10, likedBy: [], comments: [], timestamp: new Date(Date.now() + 2000).toISOString()
-              });
+              const aiPostRef = await addDoc(collection(db, 'social_posts'), { authorName: 'האנליסט AI 🤖', handle: '@luzon_analyst', teamId: 'system', isVerified: true, type: 'article', content: aiText, likes: Math.floor(Math.random() * 20) + 10, likedBy: [], comments: [], timestamp: new Date(Date.now() + 2000).toISOString() });
               backupData.generatedPostIds.push(aiPostRef.id);
           }
-        } catch (aiErr) {
-          console.error("AI Summary failed:", aiErr);
-        }
+        } catch (aiErr) { console.error("AI Summary failed:", aiErr); }
       }
 
       const updatedRounds = fixtures.map(r => {
-        if(r.round === currentRound) { 
-          return { ...r, isPlayed: true, matches: r.matches.map((m:any) => ({ ...m, hs: calculateTeamScore(m.h), as: calculateTeamScore(m.a) })) } 
-        }
+        if(r.round === currentRound) return { ...r, isPlayed: true, matches: r.matches.map((m:any) => ({ ...m, hs: calculateTeamScore(m.h), as: calculateTeamScore(m.a) })) } 
         return r;
       });
       await updateDoc(doc(db, 'leagueData', 'fixtures'), { rounds: updatedRounds });
       await updateDoc(doc(db, 'leagueData', 'settings'), { currentRound: currentRound + 1 });
-      
       await setDoc(doc(db, 'round_backups', `backup_round_${currentRound}`), backupData);
 
       setAppAlert({title: 'מחזור נסגר', msg: 'המחזור נסגר בהצלחה! הניקוד עבר לטבלה וסונכרן למסד הנתונים האוטומטי (אקסל).', type: 'success'});
@@ -875,7 +700,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
         </div>
       </div>
 
-      {/* 🟢 יומן אירועים 🟢 */}
       {isLogModalOpen && (
         <div className="fixed inset-0 z-[99999] flex flex-col justify-end md:justify-center items-center px-0 md:px-4 pb-0 md:pb-4 pt-[90px] md:pt-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setIsLogModalOpen(false)}>
           <div className="w-full max-w-4xl bg-[#0f172a] rounded-t-[32px] md:rounded-[32px] flex flex-col relative shadow-[0_-10px_40px_rgba(0,0,0,0.5)] md:shadow-2xl overflow-hidden max-h-[calc(100dvh-90px)] md:max-h-[85vh] animate-in slide-in-from-bottom-10 border-t md:border border-slate-700/50" onClick={e => e.stopPropagation()}>
@@ -916,7 +740,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                 }
 
                 logsToRender = logsToRender.filter((log: any) => !['IN', 'OUT', 'FREEZE_IN'].includes(log.type));
-
                 logsToRender.sort((a,b) => {
                      const timeA = a.timestamp?.includes('T') ? new Date(a.timestamp).getTime() : (a.id ? parseInt(a.id.split('_')[1] || '0') : 0);
                      const timeB = b.timestamp?.includes('T') ? new Date(b.timestamp).getTime() : (b.id ? parseInt(b.id.split('_')[1] || '0') : 0);
@@ -944,8 +767,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                      isHalftime && log.status !== 'CANCELLED' ? 'bg-orange-500 ring-orange-950/50' : 
                                      isRegularEdit ? 'bg-blue-500 ring-blue-950/50' : 
                                      isLateEdit ? 'bg-purple-500 ring-purple-950/50' : 
-                                     isVarUpdate ? 'bg-indigo-500 ring-indigo-950/50' :
-                                     'bg-slate-600 ring-slate-900';
+                                     isVarUpdate ? 'bg-indigo-500 ring-indigo-950/50' : 'bg-slate-600 ring-slate-900';
                       
                       const displayTime = log.timestamp 
                           ? (log.timestamp.includes('T') ? new Date(log.timestamp).toLocaleString('he-IL', { hour12: false }) : log.timestamp) 
@@ -964,11 +786,9 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                 </div>
                               </div>
                             </div>
-                            
                             <div className="text-xs text-slate-500 font-mono tracking-widest mb-1.5 bg-black/20 self-start inline-block px-2 py-0.5 rounded-md border border-slate-800">
                                 {displayTime}
                             </div>
-
                             <div className="text-xs md:text-sm font-bold text-white pt-1">
                               {isCancelAction ? <span className="text-slate-400">החילוף של {log.playerOut} ב-{log.playerIn} <span className="text-red-400">בוטל</span>.</span> : isHalftime ? (
                                 <div className="flex items-center gap-3 mt-1 bg-black/20 p-2.5 md:p-3 rounded-xl border border-white/5">
@@ -996,7 +816,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                      <span className="text-green-400 font-black">{log.playerOut}</span>
                                  </div>
                               ) : <span>{log.playerIn || log.playerOut || log.player}</span>}
-
                               {log.actionBy && (
                                   <div className="mt-3 text-[9px] md:text-[10px] text-slate-400 font-bold bg-black/40 inline-block px-2.5 py-1 rounded-md border border-white/10">
                                       ✍️ בוצע ע"י: <span className="text-slate-300">{log.actionBy}</span>
@@ -1015,15 +834,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
         </div>
       )}
 
-      {/* --- אזור הצילום המרכזי של הזירה --- */}
       <div id="arena-capture-area" className="flex flex-col gap-6 pt-2 pb-6 px-2 -mx-2 rounded-[40px] bg-[#0f172a]">
-        
         <div className="bg-slate-900/60 backdrop-blur-2xl rounded-[32px] border border-white/5 shadow-2xl overflow-hidden relative">
           <div className="absolute inset-0 bg-gradient-to-r from-green-500/10 via-transparent to-blue-500/10 opacity-30 pointer-events-none"></div>
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-green-400 via-emerald-500 to-blue-500"></div>
           
           <div className="p-5 md:p-8 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-6 relative z-10">
-              
               <div className="flex flex-wrap md:flex-nowrap gap-2 md:gap-3 w-full md:w-auto order-3 md:order-1 justify-center md:justify-start" data-html2canvas-ignore="true">
                 <button onClick={handleOpenLogModal} title="יומן אירועים" className="flex-1 md:flex-none p-3 md:p-3.5 bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white rounded-2xl border border-slate-700/50 transition-all flex items-center justify-center gap-2 group relative active:scale-95">
                   <ClipboardList className="w-5 h-5 group-active:scale-90 transition-transform" />
@@ -1073,39 +889,31 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
 
         <div className="grid grid-cols-1 gap-6">
           {currentMatches.map((match: any, idx: number) => {
-            const hScore = calculateTeamScore(match.h);
-            const aScore = calculateTeamScore(match.a);
+            const hScore = calculateTeamScore(match.h); const aScore = calculateTeamScore(match.a);
             const isExpanded = expandedTeamId === match.h || expandedTeamId === match.a;
             
-            const hEvents = getTeamLiveEvents(match.h);
-            const aEvents = getTeamLiveEvents(match.a);
-            const hUntouched = getUntouchedCount(match.h);
-            const aUntouched = getUntouchedCount(match.a);
+            const hEvents = getTeamLiveEvents(match.h); const aEvents = getTeamLiveEvents(match.a);
+            const hUntouched = getUntouchedCount(match.h); const aUntouched = getUntouchedCount(match.a);
             
-            const hTeam = teams.find(t => t.id === match.h);
-            const aTeam = teams.find(t => t.id === match.a);
+            const hTeam = teams.find(t => t.id === match.h); const aTeam = teams.find(t => t.id === match.a);
             const expandedTeamObj = isExpanded ? teams.find(t => t.id === expandedTeamId) : null;
             const isEditable = isAdmin || isModerator || (loggedInUser && expandedTeamObj && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(expandedTeamObj.teamName));
             
             return (
               <div key={idx} className={`bg-slate-900/60 backdrop-blur-md rounded-[32px] border transition-all duration-300 overflow-hidden flex flex-col ${isExpanded ? 'border-slate-500 shadow-[0_0_30px_rgba(255,255,255,0.05)]' : 'border-slate-800 shadow-xl hover:border-slate-700'}`}>
-                
                 <div className="p-0">
                   <div className={`flex items-stretch justify-between w-full h-full min-h-[90px] relative transition-colors ${isExpanded ? 'bg-slate-900/80' : 'hover:bg-slate-800/40'}`}>
                     
-                    {/* --- קבוצת בית --- */}
                     <button onClick={() => toggleTeam(match.h)} className={`flex-1 flex flex-col justify-center items-center md:items-start px-1 sm:px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.h ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת בית</span>
                       <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full text-center md:text-right leading-tight break-words px-1 ${hScore > aScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : hScore < aScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.h] || match.h}</span>
                       
-                      {/* 🟢 כפתור "בקנה" של קבוצת הבית 🟢 */}
                       <div onClick={(e) => { e.stopPropagation(); setUntouchedModal({teamId: match.h, teamName: TEAM_NAMES[match.h] || match.h}); }} className="mt-1.5 bg-slate-900/80 hover:bg-slate-700 transition-colors px-2 md:px-2.5 py-1 rounded-lg border border-slate-600 shadow-sm whitespace-nowrap z-10 flex items-center gap-1 cursor-pointer">
                          <span className="text-[9px] md:text-[10px] text-slate-300 font-bold">בקנה: <span className="text-white font-black">{hUntouched}</span></span>
                          <Edit3 className="w-2.5 h-2.5 text-blue-400" />
                       </div>
                     </button>
 
-                    {/* --- לוח התוצאות ואזור האייקונים (כרטיסים/שערים) --- */}
                     <div className="shrink-0 flex flex-col items-center justify-center bg-slate-950/80 px-4 md:px-8 border-x border-slate-800 relative z-20 shadow-inner py-2">
                       <div className="flex justify-between w-full px-2 mb-1">
                           <div className="flex gap-1.5 items-center">
@@ -1128,12 +936,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                       </div>
                     </div>
 
-                    {/* --- קבוצת חוץ --- */}
                     <button onClick={() => toggleTeam(match.a)} className={`flex-1 flex flex-col justify-center items-center md:items-end px-1 sm:px-2 md:px-6 transition-all active:scale-[0.98] ${expandedTeamId === match.a ? 'bg-slate-800 shadow-inner' : ''}`}>
                       <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">קבוצת חוץ</span>
                       <span className={`text-[14px] sm:text-[16px] md:text-2xl font-black w-full text-center md:text-left leading-tight break-words px-1 ${aScore > hScore ? 'text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)]' : aScore < hScore ? 'text-slate-400' : 'text-white'}`}>{TEAM_NAMES[match.a] || match.a}</span>
                       
-                      {/* 🟢 כפתור "בקנה" של קבוצת החוץ 🟢 */}
                       <div onClick={(e) => { e.stopPropagation(); setUntouchedModal({teamId: match.a, teamName: TEAM_NAMES[match.a] || match.a}); }} className="mt-1.5 bg-slate-900/80 hover:bg-slate-700 transition-colors px-2 md:px-2.5 py-1 rounded-lg border border-slate-600 shadow-sm whitespace-nowrap z-10 flex items-center gap-1 cursor-pointer">
                          <span className="text-[9px] md:text-[10px] text-slate-300 font-bold">בקנה: <span className="text-white font-black">{aUntouched}</span></span>
                          <Edit3 className="w-2.5 h-2.5 text-blue-400" />
@@ -1176,17 +982,14 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                           {['GK', 'DEF', 'MID', 'FWD'].map(pos => {
                             const currentLineup = applySubstitutionsToLineup(expandedTeamObj);
                             const posPlayers = currentLineup.filter((p: any) => isPosMatch(p.position, pos));
-                            
                             if (posPlayers.length === 0) return <div key={pos} className="min-h-[50px]"></div>;
 
                             return (
                               <div key={pos} className="flex justify-center flex-wrap gap-2 sm:gap-4 md:gap-8">
                                 {posPlayers.map((p: any) => {
-                                  const nameParts = p.name.split(' ');
-                                  const lastName = nameParts[nameParts.length - 1];
+                                  const nameParts = p.name.split(' '); const lastName = nameParts[nameParts.length - 1];
                                   const isSubIn = (expandedTeamObj?.transfers || []).some((t:any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED' && t.playerIn === p.name);
                                   const colors = getTeamColors(expandedTeamObj?.teamName || '', p.position === 'GK');
-                                  
                                   const hasPlayed = (p.stats && Object.values(p.stats).some(v => v === true || (typeof v === 'number' && v > 0))) || (Number(p.points) !== 0);
                                   const isUntouched = !hasPlayed && Number(p.points) === 0;
 
@@ -1198,8 +1001,7 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                         <div className={`absolute -top-2.5 -right-2.5 sm:-top-3 sm:-right-3 min-w-[22px] h-[22px] sm:min-w-[24px] h-[24px] px-1 rounded-full flex items-center justify-center text-[10.5px] sm:text-xs font-black shadow-[0_4px_10px_rgba(0,0,0,0.5)] border-2 z-30 ${
                                           p.points > 0 ? 'bg-green-500 text-black border-slate-900' : 
                                           p.points < 0 ? 'bg-red-500 text-white border-slate-900' : 
-                                          isUntouched ? 'bg-slate-800/80 text-slate-500 border-slate-600 border-dashed' : 
-                                          'bg-slate-700 text-white border-slate-900'
+                                          isUntouched ? 'bg-slate-800/80 text-slate-500 border-slate-600 border-dashed' : 'bg-slate-700 text-white border-slate-900'
                                         }`}>
                                           {isUntouched ? '-' : p.points}
                                         </div>
@@ -1207,12 +1009,9 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                         {isSubIn && (
                                           <div className="absolute -bottom-1 -left-1 z-30 group/sub">
                                             <div className="bg-orange-500 w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center text-[10px] sm:text-[10px] shadow-xl border-2 border-slate-900 cursor-help">🔄</div>
-                                            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-black/90 text-white text-[10px] font-bold py-1 px-2 rounded-lg shadow-xl opacity-0 invisible group-hover/sub:opacity-100 group-hover/sub:visible transition-all text-center pointer-events-none z-50 border border-orange-500/50 whitespace-nowrap">
-                                              שחקן מחליף
-                                            </div>
+                                            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-black/90 text-white text-[10px] font-bold py-1 px-2 rounded-lg shadow-xl opacity-0 invisible group-hover/sub:opacity-100 group-hover/sub:visible transition-all text-center pointer-events-none z-50 border border-orange-500/50 whitespace-nowrap">שחקן מחליף</div>
                                           </div>
                                         )}
-
                                       </div>
                                       <div className="w-6 sm:w-8 h-1 sm:h-1.5 bg-black/40 rounded-[100%] blur-[2px] transition-all duration-300 group-hover:w-4 sm:group-hover:w-6 group-hover:bg-black/20 group-hover:translate-y-1"></div>
                                       <div className="relative z-30 -mt-1 flex justify-center w-full">
@@ -1229,18 +1028,13 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                         </div>
                       </div>
 
-                      {/* 🟢 שורת חילופי מחצית שבוצעו (תצוגה בלבד עם אפשרות ניקוד) 🟢 */}
                       {(() => {
                         const roundSubs = (expandedTeamObj?.transfers || []).filter((t:any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
-                        
                         if (roundSubs.length === 0) return null;
 
                         return (
                           <div className="mt-4 bg-slate-900 border border-slate-700 rounded-[20px] p-4">
-                            <h4 className="text-white font-black flex items-center gap-2 mb-3">
-                              <RefreshCw className="w-4 h-4 text-orange-500" /> 
-                              חילופי מחצית שבוצעו ({roundSubs.length}/3)
-                            </h4>
+                            <h4 className="text-white font-black flex items-center gap-2 mb-3"><RefreshCw className="w-4 h-4 text-orange-500" /> חילופי מחצית שבוצעו ({roundSubs.length}/3)</h4>
                             <div className="flex flex-col gap-2">
                               {roundSubs.map((sub: any, idx: number) => {
                                 const allPossiblePlayers = [...(expandedTeamObj.published_lineup || []), ...(expandedTeamObj.published_subs_out || []), ...(expandedTeamObj.squad || []), ...(expandedTeamObj.players || [])];
@@ -1249,26 +1043,13 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
 
                                 return (
                                   <div key={idx} className="flex items-center justify-between bg-slate-800/50 p-2.5 md:p-3 rounded-xl border border-slate-700">
-                                    {/* שחקן יוצא */}
-                                    <button
-                                      onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pOut}); }}
-                                      className={`flex-1 flex items-center justify-start gap-2 text-left ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}
-                                    >
+                                    <button onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pOut}); }} className={`flex-1 flex items-center justify-start gap-2 text-left ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}>
                                       <div className="bg-red-500/20 text-red-400 font-black text-[10px] px-2 py-0.5 rounded uppercase shrink-0">יצא</div>
                                       <span className="text-white font-bold text-xs md:text-sm truncate">{pOut.name}</span>
                                       <span className="text-slate-400 font-black text-xs md:text-sm ml-auto">({pOut.points || 0})</span>
                                     </button>
-
-                                    {/* חץ אסתטי */}
-                                    <div className="px-2 md:px-4 shrink-0">
-                                      <RefreshCw className="w-4 h-4 text-slate-500" />
-                                    </div>
-
-                                    {/* שחקן נכנס */}
-                                    <button
-                                      onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pIn}); }}
-                                      className={`flex-1 flex items-center justify-end gap-2 text-right ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}
-                                    >
+                                    <div className="px-2 md:px-4 shrink-0"><RefreshCw className="w-4 h-4 text-slate-500" /></div>
+                                    <button onClick={() => { if (isEditable) setEditingPlayer({teamId: expandedTeamId!, player: pIn}); }} className={`flex-1 flex items-center justify-end gap-2 text-right ${isEditable ? 'hover:bg-slate-700/50 rounded-lg p-1 transition-colors' : 'cursor-default'}`}>
                                       <span className="text-slate-400 font-black text-xs md:text-sm mr-auto">({pIn.points || 0})</span>
                                       <span className="text-white font-bold text-xs md:text-sm truncate text-right">{pIn.name}</span>
                                       <div className="bg-green-500/20 text-green-400 font-black text-[10px] px-2 py-0.5 rounded uppercase shrink-0">נכנס</div>
@@ -1280,7 +1061,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                           </div>
                         );
                       })()}
-
                     </div>
                   </div>
                 )}
@@ -1293,14 +1073,12 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                        <span className="text-base">📊</span><span className="text-xs font-black">דוח ניקוד (VAR)</span>
                     </button>
                 </div>
-
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* 🟢 המודל של השחקנים "בקנה" שטרם שיחקו 🟢 */}
       {untouchedModal && (() => {
           const team = teams.find(t => t.id === untouchedModal.teamId);
           const currentLineup = applySubstitutionsToLineup(team);
@@ -1310,6 +1088,8 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
           }).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
 
           const isEditable = isAdmin || isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(team?.teamName || ''));
+          const roundSubs = (team?.transfers || []).filter((t: any) => t.type === 'HALFTIME_SUB' && t.round === currentRound && t.status !== 'CANCELLED');
+          const subInNames = roundSubs.map((s:any) => s.playerIn);
 
           return (
             <div className="fixed inset-0 z-[99999] flex items-end md:items-center justify-center px-0 md:px-4 pb-[85px] md:pb-[100px] pt-[90px] md:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setUntouchedModal(null)}>
@@ -1346,8 +1126,15 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                                      <div className="w-10 h-10 relative shrink-0">
                                           <Jersey primary={getTeamColors(team?.teamName || '', p.position === 'GK').prim} secondary={getTeamColors(team?.teamName || '', p.position === 'GK').sec} textColor={getTeamColors(team?.teamName || '', p.position === 'GK').text} text={['GK', 'שוער'].includes(p.position) ? '🧤' : p.position} />
                                      </div>
-                                     <div className="flex flex-col">
-                                         <span className={`text-sm font-black text-white transition-colors ${isEditable ? 'group-hover:text-blue-400' : ''}`}>{p.name}</span>
+                                     <div className="flex flex-col items-start">
+                                         <div className="flex items-center gap-2">
+                                             <span className={`text-sm font-black text-white transition-colors ${isEditable ? 'group-hover:text-blue-400' : ''}`}>{p.name}</span>
+                                             {subInNames.includes(p.name) && (
+                                                 <span className="bg-orange-500/20 text-orange-400 border border-orange-500/30 text-[8px] font-black px-1.5 py-0.5 rounded flex items-center gap-1 shadow-sm">
+                                                     🔄 מחצית (0.5)
+                                                 </span>
+                                             )}
+                                         </div>
                                          <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5">
                                              <span>{p.position}</span>
                                              <span>•</span>
@@ -1365,49 +1152,29 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
           );
       })()}
 
-      {/* 🟢 מודל דוח ניקוד VAR 🟢 */}
       {auditModal && (() => {
-          const hTeam = teams.find(t => t.id === auditModal.hId);
-          const aTeam = teams.find(t => t.id === auditModal.aId);
-          const hName = TEAM_NAMES[auditModal.hId] || auditModal.hId;
-          const aName = TEAM_NAMES[auditModal.aId] || auditModal.aId;
-
+          const hTeam = teams.find(t => t.id === auditModal.hId); const aTeam = teams.find(t => t.id === auditModal.aId);
+          const hName = TEAM_NAMES[auditModal.hId] || auditModal.hId; const aName = TEAM_NAMES[auditModal.aId] || auditModal.aId;
           const hLineup = applySubstitutionsToLineup(hTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
           const aLineup = applySubstitutionsToLineup(aTeam).sort((a:any,b:any) => POS_ORDER[a.position] - POS_ORDER[b.position]);
 
           const renderBadges = (player: any) => {
               if (!player.stats) return <div className="mt-2 text-[10px] text-slate-500 italic">לא עודכן ניקוד (0)</div>;
-              const st = player.stats;
-              const badges = [];
-              if (st.started) badges.push({ icon: '🏃‍♂️', label: 'פתח בהרכב' });
-              if (st.played60) badges.push({ icon: '⏱️', label: '60+ דק\'' });
-              if (st.won) badges.push({ icon: '🏆', label: 'ניצחון' });
-              if (st.goals > 0) badges.push({ icon: '⚽', label: 'שער', count: st.goals });
-              if (st.assists > 0) badges.push({ icon: '👟', label: 'בישול', count: st.assists });
-              if (st.assistOwnGoal > 0) badges.push({ icon: '🎁', label: 'בישול עצמי', count: st.assistOwnGoal });
+              const st = player.stats; const badges = [];
+              if (st.started) badges.push({ icon: '🏃‍♂️', label: 'פתח בהרכב' }); if (st.played60) badges.push({ icon: '⏱️', label: '60+ דק\'' }); if (st.won) badges.push({ icon: '🏆', label: 'ניצחון' });
+              if (st.goals > 0) badges.push({ icon: '⚽', label: 'שער', count: st.goals }); if (st.assists > 0) badges.push({ icon: '👟', label: 'בישול', count: st.assists }); if (st.assistOwnGoal > 0) badges.push({ icon: '🎁', label: 'בישול עצמי', count: st.assistOwnGoal });
               if (st.cleanSheet && ['GK', 'DEF', 'שוער', 'הגנה', 'בלם', 'מגן'].includes(player.position)) badges.push({ icon: '🛡️', label: 'רשת נקייה' });
               if (st.conceded > 0) badges.push({ icon: '🥅', label: 'ספיגות', count: st.conceded });
-              if (st.yellow) badges.push({ icon: '🟨', label: 'צהוב' });
-              if (st.secondYellow) badges.push({ icon: '🟨🟥', label: 'צהוב שני' });
-              if (st.red) badges.push({ icon: '🟥', label: 'אדום' });
-              if (st.penaltyWon > 0) badges.push({ icon: '🎯', label: 'סחט פנדל', count: st.penaltyWon });
-              if (st.penaltyMissed > 0) badges.push({ icon: '⚠️', label: 'החמצת פנדל', count: st.penaltyMissed });
-              if (st.penaltySaved > 0) badges.push({ icon: '🧤', label: 'עצירת פנדל', count: st.penaltySaved });
-              if (st.ownGoals > 0) badges.push({ icon: '🤦', label: 'עצמי', count: st.ownGoals });
+              if (st.yellow) badges.push({ icon: '🟨', label: 'צהוב' }); if (st.secondYellow) badges.push({ icon: '🟨🟥', label: 'צהוב שני' }); if (st.red) badges.push({ icon: '🟥', label: 'אדום' });
+              if (st.penaltyWon > 0) badges.push({ icon: '🎯', label: 'סחט פנדל', count: st.penaltyWon }); if (st.penaltyMissed > 0) badges.push({ icon: '⚠️', label: 'החמצת פנדל', count: st.penaltyMissed }); if (st.penaltySaved > 0) badges.push({ icon: '🧤', label: 'עצירת פנדל', count: st.penaltySaved }); if (st.ownGoals > 0) badges.push({ icon: '🤦', label: 'עצמי', count: st.ownGoals });
 
-              if (badges.length === 0 && (Number(player.points) === 0 || !player.points)) {
-                  return <div className="mt-2 text-[10px] text-slate-500 italic">לא שיחק / טרם צבר נקודות</div>;
-              }
-
+              if (badges.length === 0 && (Number(player.points) === 0 || !player.points)) return <div className="mt-2 text-[10px] text-slate-500 italic">לא שיחק / טרם צבר נקודות</div>;
               return (
                   <div className="flex flex-wrap gap-1.5 mt-2 pointer-events-none">
                       {badges.map((b, i) => (
                           <div key={i} className="group/badge relative flex items-center justify-center bg-slate-900 text-[11px] px-1.5 py-0.5 rounded border border-slate-700 transition-colors">
-                              <span>{b.icon}</span>
-                              {b.count && b.count > 1 && <span className="ml-1 text-white font-bold">{b.count}</span>}
-                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] font-bold px-2 py-1 rounded opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible group-active/badge:opacity-100 group-active/badge:visible whitespace-nowrap z-50 border border-slate-700 shadow-xl">
-                                  {b.label}
-                              </div>
+                              <span>{b.icon}</span>{b.count && b.count > 1 && <span className="ml-1 text-white font-bold">{b.count}</span>}
+                              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] font-bold px-2 py-1 rounded opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible group-active/badge:opacity-100 group-active/badge:visible whitespace-nowrap z-50 border border-slate-700 shadow-xl">{b.label}</div>
                           </div>
                       ))}
                   </div>
@@ -1416,34 +1183,16 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
 
           const renderPlayerRow = (p: any, fTeamName?: string, realTeamId?: string) => {
               const isEditable = isAdmin || isModerator || (loggedInUser && getNormalizedTeamId(loggedInUser.teamName) === getNormalizedTeamId(fTeamName || ''));
-              
               return (
-                  <button 
-                      key={p.id} 
-                      onClick={() => {
-                          if (isEditable) {
-                              setAuditModal(null); 
-                              setEditingPlayer({ teamId: realTeamId || (fTeamName === hName ? auditModal.hId : auditModal.aId), player: p }); 
-                          }
-                      }}
-                      className={`w-full text-right bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col mb-2 transition-colors group ${isEditable ? 'hover:bg-slate-800 cursor-pointer hover:border-blue-500/50' : 'cursor-default'}`}
-                  >
+                  <button key={p.id} onClick={() => { if (isEditable) { setAuditModal(null); setEditingPlayer({ teamId: realTeamId || (fTeamName === hName ? auditModal.hId : auditModal.aId), player: p }); } }} className={`w-full text-right bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col mb-2 transition-colors group ${isEditable ? 'hover:bg-slate-800 cursor-pointer hover:border-blue-500/50' : 'cursor-default'}`}>
                       <div className="flex justify-between items-start w-full">
                           <div className="flex flex-col">
                               <span className={`text-sm font-black text-white transition-colors ${isEditable ? 'group-hover:text-blue-400' : ''}`}>{p.name}</span>
-                              <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5">
-                                  <span>{p.position}</span>
-                                  <span>•</span>
-                                  <span>{p.team}</span>
-                                  {fTeamName && <><span>•</span><span className="text-blue-400">{fTeamName}</span></>}
-                              </div>
+                              <div className="flex gap-2 items-center text-[10px] text-slate-400 font-bold mt-0.5"><span>{p.position}</span><span>•</span><span>{p.team}</span>{fTeamName && <><span>•</span><span className="text-blue-400">{fTeamName}</span></>}</div>
                           </div>
                           <div className="flex items-center gap-3">
                               {isEditable && <Edit3 className="w-4 h-4 text-slate-600 group-hover:text-blue-400 transition-colors" />}
-                              <div className="flex flex-col items-center bg-slate-900 px-3 py-1 rounded-lg border border-slate-700">
-                                  <span className={`text-lg font-black leading-none mt-0.5 ${p.points > 0 ? 'text-green-400' : p.points < 0 ? 'text-red-400' : 'text-slate-300'}`}>{p.points || 0}</span>
-                                  <span className="text-[8px] text-slate-500 uppercase mt-1">PTS</span>
-                              </div>
+                              <div className="flex flex-col items-center bg-slate-900 px-3 py-1 rounded-lg border border-slate-700"><span className={`text-lg font-black leading-none mt-0.5 ${p.points > 0 ? 'text-green-400' : p.points < 0 ? 'text-red-400' : 'text-slate-300'}`}>{p.points || 0}</span><span className="text-[8px] text-slate-500 uppercase mt-1">PTS</span></div>
                           </div>
                       </div>
                       {renderBadges(p)}
@@ -1451,88 +1200,53 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
               );
           };
 
-          const allPlayers = [
-              ...hLineup.map((p:any) => ({...p, fTeam: hName, realTeamId: auditModal.hId})),
-              ...aLineup.map((p:any) => ({...p, fTeam: aName, realTeamId: auditModal.aId}))
-          ];
-          
+          const allPlayers = [ ...hLineup.map((p:any) => ({...p, fTeam: hName, realTeamId: auditModal.hId})), ...aLineup.map((p:any) => ({...p, fTeam: aName, realTeamId: auditModal.aId})) ];
           const grouped: Record<string, any[]> = {};
-          allPlayers.forEach(p => {
-              const rt = p.team || 'אחר';
-              if (!grouped[rt]) grouped[rt] = [];
-              grouped[rt].push(p);
-          });
+          allPlayers.forEach(p => { const rt = p.team || 'אחר'; if (!grouped[rt]) grouped[rt] = []; grouped[rt].push(p); });
           const groupedKeys = Object.keys(grouped).sort();
 
           return (
             <div className="fixed inset-0 z-[99999] flex items-end md:items-center justify-center px-0 md:px-4 pb-[85px] md:pb-[100px] pt-[90px] md:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setAuditModal(null)}>
                <div className="bg-[#0f172a] border border-slate-700 rounded-t-[32px] md:rounded-[32px] w-full max-w-4xl h-[85vh] md:h-auto md:max-h-[calc(100vh-100px)] shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-bottom-10" onClick={e => e.stopPropagation()}>
-                  
                   <div className="bg-slate-900 p-4 sm:p-5 border-b border-slate-800 relative shrink-0">
                      <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-700 rounded-full md:hidden"></div>
                      <div className="flex justify-between items-start mb-4 w-full mt-2 md:mt-0">
                          <h3 className="text-xl font-black text-white flex items-center gap-2">📊 דוח ניקוד VAR</h3>
-                         <button onClick={() => setAuditModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0">
-                            <X className="w-5 h-5" />
-                         </button>
+                         <button onClick={() => setAuditModal(null)} className="w-10 h-10 bg-slate-800 flex items-center justify-center rounded-full border border-slate-600 text-slate-300 shadow-xl transition-colors hover:bg-slate-700 hover:text-white shrink-0"><X className="w-5 h-5" /></button>
                      </div>
-                     
                      <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs text-slate-400 bg-black/40 p-2 rounded-xl border border-slate-800">
-                         <span className="font-black text-slate-300 mr-1">מקרא תגיות:</span>
-                         <span title="פתח בהרכב">🏃‍♂️ הרכב</span>
-                         <span title="שיחק 60 דק'">⏱️ 60 דק'</span>
-                         <span title="שער">⚽ גול</span>
-                         <span title="בישול">👟 בישול</span>
-                         <span title="סחט פנדל">🎯 סחט פנדל</span>
-                         <span title="החמיץ פנדל">⚠️ החמיץ פנדל</span>
-                         <span title="בישול עצמי">🎁 בישול עצמי</span>
-                         <span title="רשת נקייה">🛡️ רשת נקייה</span>
+                         <span className="font-black text-slate-300 mr-1">מקרא תגיות:</span><span title="פתח בהרכב">🏃‍♂️ הרכב</span><span title="שיחק 60 דק'">⏱️ 60 דק'</span><span title="שער">⚽ גול</span><span title="בישול">👟 בישול</span><span title="סחט פנדל">🎯 סחט פנדל</span><span title="החמיץ פנדל">⚠️ החמיץ פנדל</span><span title="בישול עצמי">🎁 בישול עצמי</span><span title="רשת נקייה">🛡️ רשת נקייה</span>
                      </div>
-
                      <div className="mt-4 flex justify-center">
                          <button onClick={() => setAuditGroupByReal(!auditGroupByReal)} className={`text-xs font-black px-4 py-2 rounded-full border transition-all ${auditGroupByReal ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}`}>
                              {auditGroupByReal ? 'מסודר לפי קבוצות פנטזי' : 'קבץ לפי קבוצות במציאות 🔄'}
                          </button>
                      </div>
                   </div>
-
                   <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-[#0f172a]">
                      {auditGroupByReal ? (
                          <div className="space-y-6">
                              {groupedKeys.map(rt => (
                                  <div key={rt} className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
                                      <h4 className="text-lg font-black text-blue-400 mb-3 border-b border-slate-800 pb-2">{rt}</h4>
-                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                         {grouped[rt].sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => renderPlayerRow(p, p.fTeam, p.realTeamId))}
-                                     </div>
+                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{grouped[rt].sort((a,b)=>POS_ORDER[a.position]-POS_ORDER[b.position]).map(p => renderPlayerRow(p, p.fTeam, p.realTeamId))}</div>
                                  </div>
                              ))}
                          </div>
                      ) : (
                          <>
-                             {/* טאבים במובייל */}
                              <div className="flex sm:hidden mb-4 bg-slate-900 rounded-xl p-1 border border-slate-800">
                                  <button onClick={() => setAuditActiveTab('h')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'h' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{hName}</button>
                                  <button onClick={() => setAuditActiveTab('a')} className={`flex-1 py-2 rounded-lg text-sm font-black transition-all ${auditActiveTab === 'a' ? 'bg-slate-700 text-white shadow-md' : 'text-slate-500'}`}>{aName}</button>
                              </div>
-                             
-                             {/* גריד שמופיע כולו ב-PC ומסתיר עמודה במובייל */}
                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                                  <div className={`${auditActiveTab === 'h' ? 'block' : 'hidden'} sm:block`}>
-                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
-                                         <span className="text-lg font-black text-white">{hName}</span>
-                                     </div>
-                                     <div className="space-y-2">
-                                         {hLineup.map((p:any) => renderPlayerRow(p, hName, auditModal.hId))}
-                                     </div>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3"><span className="text-lg font-black text-white">{hName}</span></div>
+                                     <div className="space-y-2">{hLineup.map((p:any) => renderPlayerRow(p, hName, auditModal.hId))}</div>
                                  </div>
                                  <div className={`${auditActiveTab === 'a' ? 'block' : 'hidden'} sm:block`}>
-                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3">
-                                         <span className="text-lg font-black text-white">{aName}</span>
-                                     </div>
-                                     <div className="space-y-2">
-                                         {aLineup.map((p:any) => renderPlayerRow(p, aName, auditModal.aId))}
-                                     </div>
+                                     <div className="bg-slate-900 p-3 rounded-t-2xl border-b-4 border-slate-700 text-center mb-3"><span className="text-lg font-black text-white">{aName}</span></div>
+                                     <div className="space-y-2">{aLineup.map((p:any) => renderPlayerRow(p, aName, auditModal.aId))}</div>
                                  </div>
                              </div>
                          </>
@@ -1543,15 +1257,11 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
           );
       })()}
 
-      {/* 🟢 מודל (חלון צף) לעריכת פריטי משחק בשחקן (הקיים) 🟢 */}
       {editingPlayer && (
         <div className="fixed inset-0 z-[99999] flex flex-col justify-end sm:justify-center items-center px-0 sm:px-4 pb-[85px] sm:pb-[100px] pt-[90px] sm:pt-10 bg-black/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setEditingPlayer(null)}>
-          
           <div className="relative w-full max-w-lg bg-slate-900 rounded-t-[32px] sm:rounded-[32px] border-t sm:border border-slate-700/50 shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col pointer-events-auto overflow-hidden animate-in slide-in-from-bottom-10 duration-300 max-h-[calc(100dvh-90px)] md:max-h-[85vh]" onClick={e => e.stopPropagation()}>
-            
             <div className="flex-none p-5 pt-5 md:p-6 border-b border-slate-800 bg-slate-950/50 flex justify-between items-start relative z-20 shadow-sm w-full gap-4 mt-2 md:mt-0">
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-800 rounded-full sm:hidden"></div>
-              
               <div className="flex justify-between items-center w-full">
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 md:w-14 md:h-14 relative shrink-0">
@@ -1566,7 +1276,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                       </div>
                     </div>
                   </div>
-                  
                   <div className="flex gap-3 items-center shrink-0">
                       <div className="text-center bg-slate-900 px-4 md:px-5 py-2 md:py-2.5 rounded-2xl border border-slate-800 shadow-inner relative group">
                         <div className="text-2xl md:text-3xl font-black text-green-400 tabular-nums leading-none">{currentDisplayPoints}</div>
@@ -1584,9 +1293,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                   { id: 'started', label: 'פתח בהרכב', icon: '🏃‍♂️', activeClass: 'bg-green-500/10 border-green-500/30 text-green-400' },
                   { id: 'played60', label: 'שיחק 60+ דק', icon: '⏱️', activeClass: 'bg-green-500/10 border-green-500/30 text-green-400' },
                   { id: 'won', label: 'ניצחון', icon: '🏆', activeClass: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400' },
-                  { id: 'notInSquad', label: 'לא בסגל', icon: '❌', activeClass: 'bg-red-500/10 border-red-500/30 text-red-400' }
+                  { id: 'notInSquad', label: 'לא בסגל (מחוץ ל-16)', icon: '❌', activeClass: 'bg-red-500/10 border-red-500/30 text-red-400' },
+                  { id: 'notPlayedIn16', label: 'בסגל אך לא שותף', icon: '🪑', activeClass: 'bg-slate-700/50 border-slate-500/50 text-slate-300' }
                 ].map(item => (
-                  <button key={item.id} onClick={() => updateStat(item.id, !stats[item.id as keyof typeof stats])} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all active:scale-95 ${stats[item.id as keyof typeof stats] ? item.activeClass : 'bg-slate-800/30 border-transparent hover:border-slate-700 text-slate-400'}`}>
+                  <button key={item.id} onClick={() => updateStat(item.id, !stats[item.id as keyof typeof stats])} className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all active:scale-95 ${item.id === 'notPlayedIn16' ? 'col-span-2' : ''} ${stats[item.id as keyof typeof stats] ? item.activeClass : 'bg-slate-800/30 border-transparent hover:border-slate-700 text-slate-400'}`}>
                     <span className="text-sm font-black">{item.label}</span><span className="text-xl opacity-80">{item.icon}</span>
                   </button>
                 ))}
@@ -1642,12 +1352,10 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                 <span>שמור עדכון ניקוד</span><CheckCircle2 className="w-5 h-5" />
               </button>
             </div>
-
           </div>
         </div>
       )}
 
-      {/* 🟢 מודל: היסטוריית הראש-בראש 🟢 */}
       {h2hModal && (() => {
         const h2hData = getH2HData(h2hModal.hId, h2hModal.aId);
         const t1Name = TEAM_NAMES[h2hModal.hId] || h2hModal.hId;
@@ -1679,7 +1387,6 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
                       <div className="text-center pb-1"><div className="text-xl font-black text-slate-400">{h2hData.draws}</div><div className="text-[10px] text-slate-600 font-bold mt-1">תיקו</div></div>
                       <div className="text-center"><div className="text-3xl font-black text-blue-400">{h2hData.t2Wins}</div><div className="text-[10px] text-slate-500 font-bold mt-1">ניצחונות</div></div>
                     </div>
-
                     <div className="space-y-3 pb-8">
                       <h4 className="text-sm font-black text-slate-300 mb-3 flex items-center gap-2"><CalendarDays className="w-4 h-4 text-slate-500" /> תוצאות אחרונות</h4>
                       {h2hData.pastEncounters.map((pe: any, idx: number) => (
@@ -1705,68 +1412,42 @@ const LiveArena: React.FC<LiveArenaProps> = ({ teams = [], currentRound = 0, isM
         );
       })()}
 
-      {/* 🟢 מודל: משיכה מדרייב 🟢 */}
       {driveModalOpen && (
         <div className="fixed inset-0 bg-black/90 z-[99999] flex items-start md:items-center justify-center px-0 pb-[85px] md:pb-[100px] md:px-4 pt-[90px] md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
             <div className="bg-slate-900 border border-blue-500/50 rounded-t-[40px] md:rounded-[40px] p-6 md:p-8 w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(59,130,246,0.15)] relative text-center max-h-[calc(100dvh-90px)] md:max-h-[85vh] overflow-y-auto custom-scrollbar">
-                
                 <div className="flex justify-between items-start w-full mb-6 pb-4 border-b border-slate-800 shrink-0">
                    <h3 className="text-2xl font-black text-white flex items-center gap-2">סנכרון נתונים מאקסל</h3>
                    <button onClick={() => setDriveModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black shrink-0"><X className="w-5 h-5"/></button>
                 </div>
-
                 <div className="w-16 h-16 md:w-20 md:h-20 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6 shrink-0">
                   <DownloadCloud className="w-8 h-8 md:w-10 md:h-10 text-blue-500" />
                 </div>
-                
-                <p className="text-sm text-slate-400 font-bold mb-4">
-                  הדבק כאן את קישור ה-CSV של הלשונית הנוכחית מאקסל המשחק.
-                </p>
-
+                <p className="text-sm text-slate-400 font-bold mb-4">הדבק כאן את קישור ה-CSV של הלשונית הנוכחית מאקסל המשחק.</p>
                 <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-6 text-right">
                    <h4 className="text-sm font-black text-blue-400 mb-2">איך מוציאים את הקישור הנכון?</h4>
                    <ol className="text-xs text-slate-300 space-y-2 pr-4 list-decimal marker:text-blue-500 font-medium">
                       <li>באקסל, ודא שאתה נמצא על הלשונית של <b>המחזור הנוכחי</b>.</li>
                       <li>לחץ למעלה על <b>קובץ</b> ➔ <b>שיתוף</b> ➔ <b>פרסום באינטרנט</b>.</li>
-                      <li>בחלון שייפתח, בחר בתיבה הראשונה את <b>הלשונית הספציפית</b> (לא "מסמך שלם").</li>
+                      <li>בחלון שייפתח, בחר בתיבה הראשונה את <b>הלשונית הספציפית</b>.</li>
                       <li>בתיבה השנייה בחר בפורמט <b>ערכים מופרדים בפסיקים (.csv)</b>.</li>
                       <li>לחץ "פרסם", העתק את הקישור שנוצר והדבק אותו כאן למטה.</li>
                    </ol>
                 </div>
-
-                <input 
-                  type="text" 
-                  value={driveUrlInput} 
-                  onChange={e => setDriveUrlInput(e.target.value)} 
-                  placeholder="https://docs.google.com/spreadsheets/..." 
-                  className="w-full bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 text-left font-mono text-sm mb-6 shrink-0" 
-                  dir="ltr" 
-                />
-                <button 
-                  onClick={executeFetchFromDrive} 
-                  disabled={isProcessingRound || !driveUrlInput.trim()} 
-                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
-                >
-                    {isProcessingRound ? (
-                      <><RefreshCw className="w-5 h-5 animate-spin" /> שואב נתונים...</>
-                    ) : (
-                      'סנכרן עכשיו ⚡'
-                    )}
+                <input type="text" value={driveUrlInput} onChange={e => setDriveUrlInput(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..." className="w-full bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 text-left font-mono text-sm mb-6 shrink-0" dir="ltr" />
+                <button onClick={executeFetchFromDrive} disabled={isProcessingRound || !driveUrlInput.trim()} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl shadow-lg transition-all text-lg active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 shrink-0">
+                    {isProcessingRound ? <><RefreshCw className="w-5 h-5 animate-spin" /> שואב נתונים...</> : 'סנכרן עכשיו ⚡'}
                 </button>
             </div>
         </div>
       )}
 
-      {/* 🟢 מודלים לאישור סגירה 🟢 */}
       {confirmCloseModalOpen && (
         <div className="fixed inset-0 bg-black/90 z-[99999] flex items-start md:items-center justify-center px-0 pb-[85px] md:pb-[100px] md:px-4 pt-[90px] md:pt-0 backdrop-blur-sm animate-in zoom-in-95 duration-200">
           <div className="bg-slate-900 border border-red-500/50 p-8 rounded-t-[40px] md:rounded-[40px] w-full max-w-md flex flex-col shadow-[0_0_50px_rgba(239,68,68,0.15)] relative text-center mt-auto md:mt-0">
-            
             <div className="flex justify-between items-start w-full mb-6 absolute top-6 right-6 left-6 pointer-events-none">
                <div className="w-10"></div>
                <button onClick={() => setConfirmCloseModalOpen(false)} className="w-10 h-10 bg-slate-800 hover:bg-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white transition-colors font-black pointer-events-auto"><X className="w-5 h-5"/></button>
             </div>
-
             <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 mt-4">
               <Flame className="w-10 h-10 text-red-500" />
             </div>

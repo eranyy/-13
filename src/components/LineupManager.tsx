@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren, Trophy, Lock } from 'lucide-react';
+import { ChevronDown, History, Settings2, LayoutGrid, List, MessageCircle, RefreshCw, Eraser, Search, Share2, Send, ArrowRightLeft, Snowflake, Plus, Trash2, Undo2, AlertTriangle, CheckCircle2, Siren, Trophy, Lock, Unlock } from 'lucide-react';
 import { Team, Player, User } from '../types';
 import { db } from '../firebaseConfig';
 import { collection, doc, updateDoc, arrayUnion, onSnapshot, addDoc } from 'firebase/firestore';
@@ -156,7 +156,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const [adminSquad, setAdminSquad] = useState<Player[]>([]);
   
   const [realFixtures, setRealFixtures] = useState<any[]>([]);
-  const [fixtures, setFixtures] = useState<any[]>([]); // <-- תוספת: סטייט ללוח המשחקים בפנטזי
+  const [fixtures, setFixtures] = useState<any[]>([]);
 
   const [toast, setToast] = useState<{msg: string, type: 'error'|'success'|'info'} | null>(null);
   const [appAlert, setAppAlert] = useState<{title: string, msg: string, type: 'success'|'error'|'info', whatsappText?: string} | null>(null);
@@ -165,13 +165,13 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
   const [playoffRounds, setPlayoffRounds] = useState<number[]>([]);
   const [globalLock, setGlobalLock] = useState<boolean>(false);
+  const [globalUnlock, setGlobalUnlock] = useState<boolean>(false); // 🟢 האזנה לפתיחה כפויה
   const [cupSettings, setCupSettings] = useState<{isOpen: boolean, stage: string, activeTeams: string[]}>({ isOpen: false, stage: 'groups', activeTeams: [] });
 
   const showToast = (msg: string, type: 'error' | 'success' | 'info') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
 
   const displayTeams = teams.filter(t => t.teamName && t.teamName.toUpperCase() !== 'ADMIN' && t.id !== 'admin');
   
-  // הגדרות הרשאות
   const currentRole = String(loggedInUser?.role || '');
   const isManagerOrAdmin = currentRole === 'ADMIN' || currentRole === 'ARENA_MANAGER' || currentRole === 'MODERATOR' || currentRole === 'SUPER_ADMIN' || isAdmin;
 
@@ -208,6 +208,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
             const data = doc.data();
             if (data.playoffRounds) setPlayoffRounds(data.playoffRounds);
             if (data.globalLock !== undefined) setGlobalLock(data.globalLock);
+            if (data.globalUnlock !== undefined) setGlobalUnlock(data.globalUnlock); // 🟢 משיכת מצב פתיחה כפויה
         }
     });
 
@@ -221,7 +222,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         }
     });
 
-    // 👇 תוספת: משיכת משחקי הליגה שלנו (פנטזי) כדי לאתר נגד מי הקבוצה משחקת 👇
     const unsubFixtures = onSnapshot(doc(db, 'leagueData', 'fixtures'), docSnap => {
         if(docSnap.exists()) {
             setFixtures(docSnap.data().rounds || []);
@@ -345,7 +345,15 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       isFormationValid = activeLineup.length === 11 && ALLOWED_FORMATIONS.includes(currentFormationStr) && gks === 1;
   }
 
+  // -------------------------------------------------------------
+  // פונקציית בדיקת זמנים חסינה לאזורי זמן שונים (מתוקנת לפתיחה כפויה)
+  // -------------------------------------------------------------
   const checkIsMatchStarted = (playerRealTeam: string) => {
+    // 🟢 אם הוגדרה פתיחה כפויה ע"י מנהל, תמיד מחזיר False (כלומר: המשחק טרם החל, מותר לערוך) 🟢
+    if (globalUnlock) {
+        return false;
+    }
+
     if (globalLock && !isManagerOrAdmin) {
         return true;
     }
@@ -359,25 +367,14 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     };
 
     const match = [...realFixtures].reverse().find(m => {
+        if (m.round && Number(m.round) !== currentRound) return false;
+        
         const hName = m.h || getTeamName(m.homeTeam);
         const aName = m.a || getTeamName(m.awayTeam);
         return isTeamMatch(hName, playerRealTeam) || isTeamMatch(aName, playerRealTeam);
     });
 
     if (!match) return false;
-
-    const hScoreRaw = match.hs ?? match.homeScore ?? match.homeTeamScore ?? match.scoreHome ?? match.score;
-    const aScoreRaw = match.as ?? match.awayScore ?? match.awayTeamScore ?? match.scoreAway;
-    
-    const isValidScore = (val: any) => {
-        if (val === undefined || val === null) return false;
-        const s = String(val).trim();
-        if (s === '' || s === '-' || s === 'טרם נקבע' || s === 'TBD' || s === '0') return false;
-        if (!isNaN(Number(s)) && Number(s) > 0) return true;
-        return false;
-    };
-
-    if (isValidScore(hScoreRaw) || isValidScore(aScoreRaw)) return true;
 
     const dateStr = match.date; 
     const timeStr = match.time || match.matchTime;
@@ -418,9 +415,26 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
 
     const diffMins = (currentAbsolute - matchAbsolute) / 60000;
 
+    if (diffMins > 5760) {
+        return false;
+    }
+
     if (diffMins >= 5) {
         return true;
     }
+
+    const hScoreRaw = match.hs ?? match.homeScore ?? match.homeTeamScore ?? match.scoreHome ?? match.score;
+    const aScoreRaw = match.as ?? match.awayScore ?? match.awayTeamScore ?? match.scoreAway;
+    
+    const isValidScore = (val: any) => {
+        if (val === undefined || val === null) return false;
+        const s = String(val).trim();
+        if (s === '' || s === '-' || s === 'טרם נקבע' || s === 'TBD' || s === '0') return false;
+        if (!isNaN(Number(s)) && Number(s) > 0) return true;
+        return false;
+    };
+
+    if (isValidScore(hScoreRaw) || isValidScore(aScoreRaw)) return true;
 
     return false;
   };
@@ -433,7 +447,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
   const handleWhatsAppShare = () => {
     if (!myTeam) return;
 
-    // 👇 תוספת מציאת היריבה להודעת הווצאפ 👇
     let opponentStr = "";
     if (!isCupModeActive) {
         const currentMatches = fixtures.find((r: any) => r.round === currentRound)?.matches || [];
@@ -446,7 +459,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
             opponentStr = `*נגד:* ${oppName}\n`;
         }
     }
-    // 👆 סוף התוספת 👆
 
     let text = `*${isCupModeActive ? 'הרכב גביע 🏆' : 'הרכב ליגה ⚽'} - ${myTeam.teamName}*\n${opponentStr}*מערך: ${currentFormationStr}*\n\n`;
     
@@ -624,7 +636,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
       setLineup(newLineup); 
       setBench(newBench);
       
-      // 🟢 תוספת חתימה: מי ביצע את הפעולה אם זה מנהל 🟢
       let actionBy = loggedInUser?.name || 'מנג\'ר';
       if (!isMyTeam && isManagerOrAdmin) {
           actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam.teamName}`;
@@ -637,7 +648,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           playerIn: playerIn.name, 
           playerOut: playerOut.name, 
           status: 'ACTIVE',
-          actionBy: actionBy, // הוספת החתימה
+          actionBy: actionBy,
           timestamp: new Date().toLocaleString('he-IL', { hour12: false }) 
       };
 
@@ -736,7 +747,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           updateData.lastLineupUpdate = new Date().toISOString();
           
           if (playersInNames.length > 0 || playersOutNames.length > 0) {
-              // 🟢 תוספת חתימה: מי ביצע את הפעולה אם זה מנהל 🟢
               let actionBy = loggedInUser?.name || 'מנג\'ר';
               if (!isMyTeam && isManagerOrAdmin) {
                   actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam?.teamName}`;
@@ -748,7 +758,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                   round: currentRound,
                   playersIn: playersInNames,
                   playersOut: playersOutNames,
-                  actionBy: actionBy, // הוספת החתימה
+                  actionBy: actionBy,
                   timestamp: new Date().toLocaleString('he-IL', { hour12: false })
               };
               newTransfers.push(editLog);
@@ -797,7 +807,6 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     let soldPlayerForLog: any = null;
     let boughtPlayerName = '';
 
-    // 🟢 תוספת חתימה גם לרכש (למרות שרק הבעלים מורשה כרגע, ליתר ביטחון/אדמין) 🟢
     let actionBy = loggedInUser?.name || 'מנג\'ר';
     if (!isMyTeam && isManagerOrAdmin) {
         actionBy = `${loggedInUser?.name || 'מנהל'} עבור ${myTeam.teamName}`;
@@ -861,7 +870,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
           });
       }
 
-      const activeApiKey = process.env.GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
+      const activeApiKey = import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('gemini_api_key');
 
       if (activeApiKey) {
         try {
@@ -999,7 +1008,7 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
     <div className="max-w-6xl mx-auto space-y-6 font-sans animate-in fade-in pb-56 md:pb-32" dir="rtl">
       
       {toast && (
-        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[9999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
+        <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-[9999] px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.8)] border flex items-center gap-3 animate-in slide-in-from-top-10 duration-300 backdrop-blur-xl ${toast.type === 'error' ? 'bg-red-950/90 border-red-500/50 text-red-200' : toast.type === 'info' ? 'bg-blue-950/90 border-blue-500/50 text-blue-200' : 'bg-green-950/90 border-green-500/50 text-green-200'}`}>
           <span className="text-2xl">{toast.type === 'error' ? '🛑' : toast.type === 'info' ? '⚠️' : '✅'}</span>
           <span className="font-black text-sm tracking-wide">{toast.msg}</span>
         </div>
@@ -1012,6 +1021,19 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                   <div>
                       <h3 className="text-white font-black text-lg md:text-xl tracking-wide">המחזור נעול לעדכונים!</h3>
                       <p className="text-white/80 text-xs md:text-sm font-bold">לא ניתן לבצע חילופים או שינויים בהרכב בשלב זה.</p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 🟢 באנר פתיחה כפויה (Bypass) עוקף שעון 🟢 */}
+      {globalUnlock && !globalLock && (
+          <div className="bg-gradient-to-r from-emerald-600 via-green-500 to-teal-500 p-4 rounded-[24px] shadow-2xl border border-white/20 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                  <Unlock className="w-8 h-8 text-white" />
+                  <div>
+                      <h3 className="text-white font-black text-lg md:text-xl tracking-wide">שעון מערכת בוטל - פתיחה כפויה פעילה!</h3>
+                      <p className="text-white/80 text-xs md:text-sm font-bold">מנהל אישר חילופים חופשיים לכולם ללא הגבלת זמן.</p>
                   </div>
               </div>
           </div>
@@ -1360,8 +1382,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
                 <div className="absolute inset-0 pointer-events-none opacity-20 mix-blend-overlay" style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 40px, #ffffff 40px, #ffffff 80px)' }}></div>
                 
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1/3 h-[15%] border-[2px] border-white/30 rounded-b-3xl pointer-events-none"></div>
+                <div className="absolute top-[15%] left-1/2 -translate-x-1/2 w-1/5 h-[8%] border-[2px] border-transparent border-b-white/30 rounded-b-full pointer-events-none"></div>
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1/6 h-[6%] border-[2px] border-white/30 rounded-b-lg pointer-events-none"></div>
                 <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1/2 h-[18%] border-[2px] border-white/30 rounded-t-[40px] pointer-events-none"></div>
+                <div className="absolute bottom-[18%] left-1/2 -translate-x-1/2 w-1/4 h-[10%] border-[2px] border-transparent border-t-white/30 rounded-t-full pointer-events-none"></div>
                 <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1/4 h-[8%] border-[2px] border-white/30 rounded-t-xl pointer-events-none"></div>
                 <div className="absolute bottom-[10%] left-1/2 -translate-x-1/2 w-2 h-2 bg-white/40 rounded-full pointer-events-none"></div>
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 border-[2px] border-white/30 rounded-full pointer-events-none"></div>
@@ -1566,10 +1590,10 @@ const LineupManager: React.FC<LineupManagerProps> = ({ teams, loggedInUser, curr
         <div className="bg-black/80 backdrop-blur-2xl p-2.5 rounded-[32px] border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-3 w-full max-w-[380px] pointer-events-auto transition-all animate-in slide-in-from-bottom-10">
            <button 
              onClick={handleSaveLineup} 
-             disabled={isSaving || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11) || (globalLock && !isManagerOrAdmin)} 
-             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${globalLock && !isManagerOrAdmin ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : isFormationValid && (isPlayoffRound || isCupModeActive || activeLineup.length === 11) ? (isCupModeActive ? 'bg-gradient-to-r from-yellow-400 to-amber-600 text-black hover:brightness-110 active:scale-95 shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95') : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
+             disabled={isSaving || (!isPlayoffRound && !isCupModeActive && activeLineup.length !== 11) || (globalLock && !isManagerOrAdmin && !globalUnlock)} 
+             className={`flex-1 py-4 rounded-[24px] font-black text-lg transition-all shadow-inner flex flex-col items-center justify-center ${globalLock && !isManagerOrAdmin && !globalUnlock ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : isFormationValid && (isPlayoffRound || isCupModeActive || activeLineup.length === 11) ? (isCupModeActive ? 'bg-gradient-to-r from-yellow-400 to-amber-600 text-black hover:brightness-110 active:scale-95 shadow-[0_0_15px_rgba(250,204,21,0.5)]' : 'bg-gradient-to-r from-green-500 to-emerald-600 text-black hover:brightness-110 active:scale-95') : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}
            >
-             {globalLock && !isManagerOrAdmin ? (
+             {globalLock && !isManagerOrAdmin && !globalUnlock ? (
                <span className="text-sm">המחזור נעול 🔒</span>
              ) : isSaving ? (
                <span className="animate-pulse">שומר...</span>

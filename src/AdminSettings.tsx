@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, auth } from './firebaseConfig'; 
+import { db, auth, functions } from './firebaseConfig'; 
 import { analyzeMatchImage, generateAISummary, generateRumors } from './geminiService'; 
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, getDocs, writeBatch, query, getDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff, Lock, Unlock, Edit3, Plus, X } from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { DownloadCloud, Users, RefreshCw, Database, AlertTriangle, UploadCloud, CalendarDays, Camera, Sparkles, Trash2, Undo2, MessageSquare, Megaphone, Star, Key, Eye, Monitor, Smartphone, Clock, Eraser, Calculator, Flame, Trophy, Bell, BellOff, Lock, Unlock, Edit3, Plus, X, Server } from 'lucide-react';
 import { parseFantasyExcel } from './utils/FantasyExcelParser'; 
 
 interface AdminSettingsProps { onClose?: () => void; isAdmin?: boolean; inline?: boolean; initialSubTab?: string; }
@@ -119,6 +120,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   
   const [tableDriveUrl, setTableDriveUrl] = useState('');
   const [isSyncingTable, setIsSyncingTable] = useState(false);
+  const [isSyncingHistory, setIsSyncingHistory] = useState(false);
   const [squadsDriveUrl, setSquadsDriveUrl] = useState('');
   const [transfersDriveUrl, setTransfersDriveUrl] = useState('');
   
@@ -127,13 +129,13 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [tempCupOverrides, setTempCupOverrides] = useState<any>({});
   
   const [globalLock, setGlobalLock] = useState<boolean>(false);
+  const [globalUnlock, setGlobalUnlock] = useState<boolean>(false); // 🟢 משתנה חדש לעקיפת שעון פתיחה כפויה
   const [systemCurrentRound, setSystemCurrentRound] = useState<number>(1);
 
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
   const sheetsApiKey = 'AIzaSyARwamUBjcirbqFtWn_RpKkOdiHmeGlis0';
   const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('gemini_api_key') || 'AIzaSyBM6ArDeYA0oRuOLQPXt4qVIGDSrQALaYQ');
 
-  // 🟢 משתנים למנהל משחקים ידני (נפתח כמודל) 🟢
   const [realFixturesMatches, setRealFixturesMatches] = useState<any[]>([]);
   const [showFixtureModal, setShowFixtureModal] = useState(false);
   const [editingMatchIndex, setEditingMatchIndex] = useState<number | null>(null);
@@ -155,12 +157,9 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             if (data.playoffRounds && Array.isArray(data.playoffRounds)) {
                 setPlayoffRoundsInput(data.playoffRounds.join(', '));
             }
-            if (data.globalLock !== undefined) {
-                setGlobalLock(data.globalLock);
-            }
-            if (data.currentRound !== undefined) {
-                setSystemCurrentRound(data.currentRound);
-            }
+            if (data.globalLock !== undefined) setGlobalLock(data.globalLock);
+            if (data.globalUnlock !== undefined) setGlobalUnlock(data.globalUnlock); // 🟢 האזנה למצב פתיחה כפויה
+            if (data.currentRound !== undefined) setSystemCurrentRound(data.currentRound);
         }
     });
 
@@ -172,16 +171,24 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         }
     });
 
-    // 🟢 מאזין למשחקים החיים ב-real_fixtures 🟢
     const unsubRealFixtures = onSnapshot(doc(db, "leagueData", "real_fixtures"), (docSnap) => {
-        if(docSnap.exists()) {
-            setRealFixturesMatches(docSnap.data().matches || []);
-        } else {
-            setRealFixturesMatches([]);
-        }
+        if(docSnap.exists()) setRealFixturesMatches(docSnap.data().matches || []);
+        else setRealFixturesMatches([]);
+    });
+
+    // 🟢 מאזין ל-Presence בזמן אמת עבור הרדאר 🟢
+    const unsubPresence = onSnapshot(collection(db, 'presence'), (snap) => {
+        const now = Date.now();
+        const threeMinutesAgo = now - (3 * 60 * 1000);
+        const active = snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as any))
+          .filter(user => user.lastSeen?.toMillis() > threeMinutesAgo);
+          
+        const uniqueActiveByName = Array.from(new Map(active.map(u => [u.name, u])).values());
+        setOnlineUsers(uniqueActiveByName);
     });
     
-    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); unsubCup(); unsubRealFixtures(); };
+    return () => { unsubUsers(); unsubDeletedUsers(); unsubFixtures(); unsubLogs(); unsubLoginLogs(); unsubSettings(); unsubCup(); unsubRealFixtures(); unsubPresence(); };
   }, []);
 
   useEffect(() => {
@@ -189,20 +196,15 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const timeLimit = thirtyDaysAgo.getTime();
-
         const oldLogs = loginLogs.filter(log => new Date(log.timestamp).getTime() < timeLimit);
         
         if (oldLogs.length > 0) {
             const deleteOldLogs = async () => {
                 try {
                     const batch = writeBatch(db);
-                    oldLogs.slice(0, 400).forEach(log => {
-                        batch.delete(doc(db, 'login_logs', log.id));
-                    });
+                    oldLogs.slice(0, 400).forEach(log => batch.delete(doc(db, 'login_logs', log.id)));
                     await batch.commit();
-                } catch(e) {
-                    console.error("Auto-cleanup failed", e);
-                }
+                } catch(e) { console.error("Auto-cleanup failed", e); }
             };
             deleteOldLogs();
         }
@@ -211,15 +213,27 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
 
   const showMessage = (msg: string, type: 'success' | 'error' | 'info' = 'success') => { setToast({msg, type}); if (type !== 'info') setTimeout(() => setToast(null), 5000); };
 
+  // 🟢 פונקציית הפעלת/כיבוי נעילה 🟢
   const toggleGlobalLock = async () => {
       setLoading(true);
       const newLockState = !globalLock;
       try {
-          await setDoc(doc(db, 'leagueData', 'settings'), { globalLock: newLockState }, { merge: true });
+          // אם אנחנו נועלים, כדאי לכבות את הפתיחה הכפויה אם היא דולקת
+          await setDoc(doc(db, 'leagueData', 'settings'), { globalLock: newLockState, globalUnlock: false }, { merge: true });
           showMessage(`✅ נעילת המחזור ${newLockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
-      } catch (e) {
-          showMessage('❌ שגיאה בעדכון מצב הנעילה', 'error');
-      }
+      } catch (e) { showMessage('❌ שגיאה בעדכון מצב הנעילה', 'error'); }
+      setLoading(false);
+  };
+
+  // 🟢 פונקציית הפעלת/כיבוי פתיחה כפויה עוקפת שעון 🟢
+  const toggleGlobalUnlock = async () => {
+      setLoading(true);
+      const newUnlockState = !globalUnlock;
+      try {
+          // אם אנחנו פותחים בכוח, נכבה את הנעילה הגלובלית אם היא דולקת
+          await setDoc(doc(db, 'leagueData', 'settings'), { globalUnlock: newUnlockState, globalLock: false }, { merge: true });
+          showMessage(`✅ פתיחת מחזור (עוקף שעון) ${newUnlockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
+      } catch (e) { showMessage('❌ שגיאה בעדכון מצב פתיחה', 'error'); }
       setLoading(false);
   };
 
@@ -228,9 +242,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       try {
           await setDoc(doc(db, 'leagueData', 'cup_settings'), updates, { merge: true });
           showMessage('✅ הגדרות הגביע עודכנו!', 'success');
-      } catch (e) {
-          showMessage('❌ שגיאה בעדכון הגביע', 'error');
-      }
+      } catch (e) { showMessage('❌ שגיאה בעדכון הגביע', 'error'); }
       setIsSavingCup(false);
   };
 
@@ -257,9 +269,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               }
           }, { merge: true });
           showMessage('✅ הבתים הוגרלו ונשמרו בהצלחה לפי מיקומי הליגה!', 'success');
-      } catch(e) {
-          showMessage('❌ שגיאה בהגרלת בתים', 'error');
-      }
+      } catch(e) { showMessage('❌ שגיאה בהגרלת בתים', 'error'); }
       setIsSavingCup(false);
   };
 
@@ -276,22 +286,11 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const handleSavePlayoffRounds = async () => {
     setIsSavingPlayoffs(true);
     try {
-        const roundsArray = playoffRoundsInput
-            .split(',')
-            .map(s => parseInt(s.trim()))
-            .filter(n => !isNaN(n)); 
-
-        await setDoc(doc(db, 'leagueData', 'settings'), {
-            playoffRounds: roundsArray
-        }, { merge: true });
-
+        const roundsArray = playoffRoundsInput.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)); 
+        await setDoc(doc(db, 'leagueData', 'settings'), { playoffRounds: roundsArray }, { merge: true });
         showMessage(`✅ הוגדרו מחזורי פלייאוף: ${roundsArray.length > 0 ? roundsArray.join(', ') : 'אופס (רשימה ריקה)'}`, 'success');
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בשמירת מחזורי הפלייאוף', 'error');
-    } finally {
-        setIsSavingPlayoffs(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה בשמירת מחזורי הפלייאוף', 'error'); } 
+    finally { setIsSavingPlayoffs(false); }
   };
 
   const triggerUndo = async () => {
@@ -300,14 +299,11 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       const currentRound = settingsSnap.exists() ? settingsSnap.data().currentRound || 1 : 1;
       if (currentRound <= 1) return showMessage('❌ הליגה במחזור 1, אין לאן לחזור אחורה.', 'error');
       setShowUndoConfirm(true);
-    } catch (e) {
-      showMessage('שגיאה בקריאת נתוני הליגה.', 'error');
-    }
+    } catch (e) { showMessage('שגיאה בקריאת נתוני הליגה.', 'error'); }
   };
 
   const executeUndoRound = async () => {
-    setShowUndoConfirm(false);
-    setIsUndoing(true);
+    setShowUndoConfirm(false); setIsUndoing(true);
     try {
         const settingsSnap = await getDoc(doc(db, 'leagueData', 'settings'));
         const currentRound = settingsSnap.data()?.currentRound || 1;
@@ -316,28 +312,19 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         showMessage('מוריד גיבוי מהכספת ומשחזר נתונים... ⏳', 'info');
 
         const backupSnap = await getDoc(doc(db, 'round_backups', `backup_round_${previousRound}`));
-        if (!backupSnap.exists()) {
-            setIsUndoing(false);
-            return showMessage(`❌ לא נמצא קובץ גיבוי למחזור ${previousRound}.`, 'error');
-        }
+        if (!backupSnap.exists()) { setIsUndoing(false); return showMessage(`❌ לא נמצא קובץ גיבוי למחזור ${previousRound}.`, 'error'); }
 
         const backup = backupSnap.data();
         const batch = writeBatch(db);
 
         if (backup.teamsSnapshot && Array.isArray(backup.teamsSnapshot)) {
             backup.teamsSnapshot.forEach((team: any) => {
-                if (team.id !== 'admin' && team.id !== 'system') {
-                    batch.set(doc(db, 'users', team.id), team);
-                }
+                if (team.id !== 'admin' && team.id !== 'system') batch.set(doc(db, 'users', team.id), team);
             });
         }
 
-        if (backup.fixturesSnapshot) {
-            batch.update(doc(db, 'leagueData', 'fixtures'), { rounds: backup.fixturesSnapshot });
-        }
-
+        if (backup.fixturesSnapshot) batch.update(doc(db, 'leagueData', 'fixtures'), { rounds: backup.fixturesSnapshot });
         batch.update(doc(db, 'leagueData', 'settings'), { currentRound: previousRound });
-
         await batch.commit();
 
         if (backup.generatedPostIds && backup.generatedPostIds.length > 0) {
@@ -345,22 +332,14 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                 try { await deleteDoc(doc(db, 'social_posts', postId)); } catch(e) { console.error('Failed to delete post', postId) }
             }
         }
-
         showMessage(`✅ שוחזר בהצלחה! הליגה חזרה למחזור ${previousRound}.`, 'success');
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה חמורה בשחזור: ' + e.message, 'error');
-    } finally {
-        setIsUndoing(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה חמורה בשחזור: ' + e.message, 'error'); } 
+    finally { setIsUndoing(false); }
   };
 
   const executeResetLiveArena = async () => {
-    setShowResetConfirm(false);
-    setLoading(true);
-    setIsResettingLive(true);
+    setShowResetConfirm(false); setLoading(true); setIsResettingLive(true);
     showMessage('מאפס את נתוני הלייב לכל הקבוצות... 🧹', 'info');
-    
     try {
         const batch = writeBatch(db);
         const emptyStats = { started: false, played60: false, notInSquad: false, won: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, secondYellow: false, red: false, penaltyWon: 0, penaltyMissed: 0, penaltySaved: 0, ownGoals: 0, assistOwnGoal: 0 };
@@ -369,23 +348,15 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             if (u.id !== 'admin' && u.id !== 'system') {
                 const resetArray = (arr: any[]) => (arr || []).map((p:any) => ({...p, points: 0, stats: emptyStats}));
                 batch.update(doc(db, 'users', u.id), {
-                    squad: resetArray(u.squad),
-                    players: resetArray(u.players),
-                    published_lineup: resetArray(u.published_lineup),
-                    published_subs_out: resetArray(u.published_subs_out),
-                    lineup: resetArray(u.lineup)
+                    squad: resetArray(u.squad), players: resetArray(u.players), published_lineup: resetArray(u.published_lineup),
+                    published_subs_out: resetArray(u.published_subs_out), lineup: resetArray(u.lineup)
                 });
             }
         });
-        
         await batch.commit();
         showMessage('✅ הזירה אופסה בהצלחה! כל השחקנים חזרו ל-0 נקודות.', 'success');
-    } catch (e: any) {
-        showMessage('❌ שגיאה באיפוס הזירה: ' + e.message, 'error');
-    } finally {
-        setLoading(false);
-        setIsResettingLive(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה באיפוס הזירה: ' + e.message, 'error'); } 
+    finally { setLoading(false); setIsResettingLive(false); }
   };
 
   const handleRefreshRadar = async () => {
@@ -394,238 +365,120 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         const snap = await getDocs(collection(db, "login_logs"));
         setLoginLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
         showMessage('✅ הרדאר רוענן בהצלחה!', 'success');
-    } catch(e) {
-        showMessage('❌ שגיאה ברענון הרדאר', 'error');
-    }
+    } catch(e) { showMessage('❌ שגיאה ברענון הרדאר', 'error'); }
     setLoading(false);
   };
 
   const handleClearAllLogs = async () => {
     if (!window.confirm('האם אתה בטוח שברצונך למחוק לצמיתות את כל היסטוריית ההתחברויות?')) return;
-    setLoading(true);
-    showMessage('מוחק נתונים... 🧹', 'info');
+    setLoading(true); showMessage('מוחק נתונים... 🧹', 'info');
     try {
         const snap = await getDocs(collection(db, "login_logs"));
         const batch = writeBatch(db);
         let count = 0;
-        
-        snap.docs.forEach(d => {
-            batch.delete(d.ref);
-            count++;
-        });
-        
+        snap.docs.forEach(d => { batch.delete(d.ref); count++; });
         await batch.commit();
         showMessage(`✅ נמחקו ${count} רשומות בהצלחה! הרדאר נקי.`, 'success');
-    } catch (e: any) {
-        showMessage('❌ שגיאה במחיקת הרדאר: ' + e.message, 'error');
-    }
+    } catch (e: any) { showMessage('❌ שגיאה במחיקת הרדאר: ' + e.message, 'error'); }
     setLoading(false);
   };
 
   const generateManualAISummary = async () => {
     if (!geminiApiKey) return showMessage('❌ חסר מפתח Gemini API!', 'error');
-    setIsGeneratingPost(true);
-    showMessage('הפרשן שלנו כותב את הטור... ✍️', 'info');
-    
+    setIsGeneratingPost(true); showMessage('הפרשן שלנו כותב את הטור... ✍️', 'info');
     try {
         let matchesToAnalyze = [];
         if (fixtures && fixtures.length > 0) {
             const activeRound = [...fixtures].reverse().find(r => r.matches && r.matches.length > 0);
-            if (activeRound) {
-                matchesToAnalyze = activeRound.matches;
-            }
+            if (activeRound) matchesToAnalyze = activeRound.matches;
         }
-
         const summary = await generateAISummary(matchesToAnalyze, users, geminiApiKey);
-        
         await addDoc(collection(db, 'social_posts'), {
-            authorName: 'האנליסט AI 🤖',
-            handle: '@luzon_analyst',
-            teamId: 'system',
-            isVerified: true,
-            type: 'article',
-            content: summary,
-            likes: Math.floor(Math.random() * 20) + 10,
-            likedBy: [],
-            comments: [],
-            timestamp: new Date().toISOString()
+            authorName: 'האנליסט AI 🤖', handle: '@luzon_analyst', teamId: 'system', isVerified: true, type: 'article', content: summary,
+            likes: Math.floor(Math.random() * 20) + 10, likedBy: [], comments: [], timestamp: new Date().toISOString()
         });
         showMessage('✅ סיכום המחזור פורסם בהצלחה!', 'success');
-    } catch (e: any) {
-        console.error(e);
-        const errorMsg = e.message.includes('offline') ? 'שגיאת רשת. בדוק חיבור לאינטרנט ונסה שוב.' : e.message;
-        showMessage('❌ שגיאה ביצירת סיכום: ' + errorMsg, 'error');
-    } finally {
-        setIsGeneratingPost(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה ביצירת סיכום: ' + e.message, 'error'); } 
+    finally { setIsGeneratingPost(false); }
   };
 
   const generateRumorPost = async () => {
     if (!geminiApiKey) return showMessage('❌ חסר מפתח Gemini API!', 'error');
-    setIsGeneratingPost(true);
-    showMessage('הכתב שלנו מדליף מהחדרים... 🕵️', 'info');
+    setIsGeneratingPost(true); showMessage('הכתב שלנו מדליף מהחדרים... 🕵️', 'info');
     try {
         const rumors = await generateRumors(users, geminiApiKey);
-        
         await addDoc(collection(db, 'social_posts'), {
-            authorName: 'המדליף האלמוני 🤫',
-            handle: '@luzon_leaks',
-            teamId: 'system',
-            isVerified: true,
-            type: 'alert',
-            content: rumors,
-            likes: Math.floor(Math.random() * 15) + 5,
-            likedBy: [],
-            comments: [],
-            timestamp: new Date().toISOString()
+            authorName: 'המדליף האלמוני 🤫', handle: '@luzon_leaks', teamId: 'system', isVerified: true, type: 'alert', content: rumors,
+            likes: Math.floor(Math.random() * 15) + 5, likedBy: [], comments: [], timestamp: new Date().toISOString()
         });
         showMessage('✅ השמועות פורסמו בהצלחה!', 'success');
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה ביצירת שמועות: ' + e.message, 'error');
-    } finally {
-        setIsGeneratingPost(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה ביצירת שמועות: ' + e.message, 'error'); } 
+    finally { setIsGeneratingPost(false); }
   };
 
   const recalculateTableFromApp = async () => {
-    setLoading(true);
-    setIsSyncingTable(true);
-    showMessage('סורק משחקים ומחשב טבלה, נקודות ומומנטום... 🧮', 'info');
-
+    setLoading(true); setIsSyncingTable(true); showMessage('סורק משחקים ומחשב טבלה... 🧮', 'info');
     try {
-        const batch = writeBatch(db);
-        let updatedCount = 0;
-        let matchesProcessed = 0; 
-
+        const batch = writeBatch(db); let updatedCount = 0; let matchesProcessed = 0; 
         const tableData: Record<string, any> = {};
         users.forEach(u => {
             if (u.id !== 'admin' && u.id !== 'system') {
                 const key = getNormalizedTeamId(u.teamName) || getNormalizedTeamId(u.id);
-                tableData[key] = { 
-                    docId: u.id, 
-                    played: 0, wins: 0, draws: 0, losses: 0, 
-                    gf: 0, ga: 0, points: 0, 
-                    matchHistory: [] 
-                };
+                tableData[key] = { docId: u.id, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0, points: 0, matchHistory: [] };
             }
         });
 
-        fixtures.forEach((round: any, roundIndex: number) => {
-            const matches = round.matches || [];
-            
-            matches.forEach((match: any) => {
-                const homeNameOrId = match.h || match.homeTeam || (typeof match.homeTeam === 'object' ? (match.homeTeam?.name || match.homeTeam?.id) : '');
-                const awayNameOrId = match.a || match.awayTeam || (typeof match.awayTeam === 'object' ? (match.awayTeam?.name || match.awayTeam?.id) : '');
-
-                const homeKey = getNormalizedTeamId(homeNameOrId);
-                const awayKey = getNormalizedTeamId(awayNameOrId);
-                
-                const hScoreRaw = match.hs ?? match.homeScore ?? match.homeTeamScore ?? match.scoreHome ?? match.homePoints;
-                const aScoreRaw = match.as ?? match.awayScore ?? match.awayTeamScore ?? match.scoreAway ?? match.awayPoints;
+        fixtures.forEach((round: any) => {
+            (round.matches || []).forEach((match: any) => {
+                const homeKey = getNormalizedTeamId(match.h || match.homeTeam || match.homeTeam?.name || match.homeTeam?.id);
+                const awayKey = getNormalizedTeamId(match.a || match.awayTeam || match.awayTeam?.name || match.awayTeam?.id);
+                const hScoreRaw = match.hs ?? match.homeScore ?? match.homePoints;
+                const aScoreRaw = match.as ?? match.awayScore ?? match.awayPoints;
 
                 if (hScoreRaw !== undefined && aScoreRaw !== undefined && hScoreRaw !== null && hScoreRaw !== '') {
-                    const hScore = Number(hScoreRaw);
-                    const aScore = Number(aScoreRaw);
-
+                    const hScore = Number(hScoreRaw); const aScore = Number(aScoreRaw);
                     if (!isNaN(hScore) && !isNaN(aScore)) {
-                        matchesProcessed++; 
-                        const diff = Math.abs(hScore - aScore);
-
+                        matchesProcessed++; const diff = Math.abs(hScore - aScore);
                         if (tableData[homeKey]) {
-                            tableData[homeKey].played++;
-                            tableData[homeKey].gf += hScore;
-                            tableData[homeKey].ga += aScore;
-
-                            if (hScore > aScore) {
-                                tableData[homeKey].wins++;
-                                tableData[homeKey].points += diff >= 20 ? 3 : 2;
-                                tableData[homeKey].matchHistory.push({ result: 'W', oppScore: aScore });
-                            } else if (hScore === aScore) {
-                                tableData[homeKey].draws++;
-                                tableData[homeKey].points += 1;
-                                tableData[homeKey].matchHistory.push({ result: 'D', oppScore: aScore });
-                            } else {
-                                tableData[homeKey].losses++;
-                                tableData[homeKey].matchHistory.push({ result: 'L', oppScore: aScore });
-                            }
+                            tableData[homeKey].played++; tableData[homeKey].gf += hScore; tableData[homeKey].ga += aScore;
+                            if (hScore > aScore) { tableData[homeKey].wins++; tableData[homeKey].points += diff >= 20 ? 3 : 2; tableData[homeKey].matchHistory.push({ result: 'W', oppScore: aScore }); } 
+                            else if (hScore === aScore) { tableData[homeKey].draws++; tableData[homeKey].points += 1; tableData[homeKey].matchHistory.push({ result: 'D', oppScore: aScore }); } 
+                            else { tableData[homeKey].losses++; tableData[homeKey].matchHistory.push({ result: 'L', oppScore: aScore }); }
                         }
-
                         if (tableData[awayKey]) {
-                            tableData[awayKey].played++;
-                            tableData[awayKey].gf += aScore;
-                            tableData[awayKey].ga += hScore;
-
-                            if (aScore > hScore) {
-                                tableData[awayKey].wins++;
-                                tableData[awayKey].points += diff >= 20 ? 3 : 2;
-                                tableData[awayKey].matchHistory.push({ result: 'W', oppScore: hScore });
-                            } else if (aScore === hScore) {
-                                tableData[awayKey].draws++;
-                                tableData[awayKey].points += 1;
-                                tableData[awayKey].matchHistory.push({ result: 'D', oppScore: hScore });
-                            } else {
-                                tableData[awayKey].losses++;
-                                tableData[awayKey].matchHistory.push({ result: 'L', oppScore: hScore });
-                            }
+                            tableData[awayKey].played++; tableData[awayKey].gf += aScore; tableData[awayKey].ga += hScore;
+                            if (aScore > hScore) { tableData[awayKey].wins++; tableData[awayKey].points += diff >= 20 ? 3 : 2; tableData[awayKey].matchHistory.push({ result: 'W', oppScore: hScore }); } 
+                            else if (aScore === hScore) { tableData[awayKey].draws++; tableData[awayKey].points += 1; tableData[awayKey].matchHistory.push({ result: 'D', oppScore: hScore }); } 
+                            else { tableData[awayKey].losses++; tableData[awayKey].matchHistory.push({ result: 'L', oppScore: hScore }); }
                         }
                     }
                 }
             });
         });
 
-        if (matchesProcessed === 0) {
-            showMessage('⚠️ לא נמצאו משחקים עם תוצאות עדיין!', 'error');
-            setLoading(false);
-            setIsSyncingTable(false);
-            return; 
-        }
+        if (matchesProcessed === 0) { setLoading(false); setIsSyncingTable(false); return showMessage('⚠️ לא נמצאו משחקים עם תוצאות עדיין!', 'error'); }
 
         Object.keys(tableData).forEach(teamKey => {
             const t = tableData[teamKey];
-            
-            const last5 = t.matchHistory.slice(-5);
-            const recentForm = last5.map((m: any) => m.result);
+            const last5 = t.matchHistory.slice(-5); const recentForm = last5.map((m: any) => m.result);
             const last3 = t.matchHistory.slice(-3);
-            
             const streakFire = last3.length === 3 && last3.every((m: any) => m.result === 'W');
             const streakClown = last3.length === 3 && last3.every((m: any) => m.result === 'L');
             const ironDefense = last3.length === 3 && last3.every((m: any) => m.oppScore === 0);
 
-            batch.update(doc(db, 'users', t.docId), {
-                played: t.played,
-                wins: t.wins,
-                draws: t.draws,
-                losses: t.losses,
-                gf: t.gf,
-                ga: t.ga,
-                points: t.points,
-                recentForm: recentForm,
-                streakFire: streakFire,
-                streakClown: streakClown,
-                ironDefense: ironDefense
-            });
+            batch.update(doc(db, 'users', t.docId), { played: t.played, wins: t.wins, draws: t.draws, losses: t.losses, gf: t.gf, ga: t.ga, points: t.points, recentForm: recentForm, streakFire: streakFire, streakClown: streakClown, ironDefense: ironDefense });
             updatedCount++;
         });
 
         await batch.commit();
-        showMessage(`✅ מדהים! טבלה, נקודות ומומנטום עודכנו בהצלחה ל-${updatedCount} קבוצות! (חושבו ${matchesProcessed} משחקים)`, 'success');
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בחישוב הטבלה: ' + e.message, 'error');
-    } finally {
-        setLoading(false);
-        setIsSyncingTable(false);
-    }
+        showMessage(`✅ מדהים! טבלה עודכנה ל-${updatedCount} קבוצות! (חושבו ${matchesProcessed} משחקים)`, 'success');
+    } catch (e: any) { showMessage('❌ שגיאה בחישוב הטבלה: ' + e.message, 'error'); } 
+    finally { setLoading(false); setIsSyncingTable(false); }
   };
 
   const handleSyncTopPlayersWithAPI = async () => {
-    if (!topPlayersDriveUrl.trim() || !sheetsApiKey) {
-        return showMessage('❌ חסר קישור לאקסל או מפתח API!', 'error');
-    }
-    
-    setLoading(true);
-    showMessage('מתחבר ל-API וסורק מחזורים... 🤖', 'info');
+    if (!topPlayersDriveUrl.trim() || !sheetsApiKey) return showMessage('❌ חסר קישור לאקסל או מפתח API!', 'error');
+    setLoading(true); showMessage('מתחבר ל-API וסורק מחזורים... 🤖', 'info');
 
     try {
         const match = topPlayersDriveUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
@@ -633,28 +486,17 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         const spreadsheetId = match[1];
 
         const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?key=${sheetsApiKey}`);
-        if (!metaRes.ok) {
-            const errorData = await metaRes.json().catch(() => ({}));
-            const apiError = errorData.error?.message || metaRes.statusText;
-            throw new Error(`שגיאת API (${metaRes.status}): ${apiError}. ודא שהמפתח תקין ושהאקסל פתוח לכולם (Anyone with the link).`);
-        }
+        if (!metaRes.ok) throw new Error(`שגיאת API. ודא שהמפתח תקין ושהאקסל פתוח לכולם (Anyone with the link).`);
         const metaData = await metaRes.json();
 
-        const roundSheets = metaData.sheets
-            .map((s: any) => s.properties.title)
-            .filter((title: string) => title.includes('מחזור'));
-
+        const roundSheets = metaData.sheets.map((s: any) => s.properties.title).filter((title: string) => title.includes('מחזור'));
         if (roundSheets.length === 0) throw new Error('לא נמצאו לשוניות עם המילה "מחזור".');
 
         showMessage(`מזהה ${roundSheets.length} מחזורים... מנתח נתונים ⚡`, 'info');
 
         const ranges = roundSheets.map((s: string) => encodeURIComponent(`'${s}'!D:N`)).join('&ranges=');
         const dataRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?ranges=${ranges}&key=${sheetsApiKey}`);
-        if (!dataRes.ok) {
-            const errorData = await dataRes.json().catch(() => ({}));
-            const apiError = errorData.error?.message || dataRes.statusText;
-            throw new Error(`שגיאת משיכת נתונים (${dataRes.status}): ${apiError}`);
-        }
+        if (!dataRes.ok) throw new Error(`שגיאת משיכת נתונים`);
         const data = await dataRes.json();
 
         if (!data.valueRanges) throw new Error('לא הצלחתי למשוך נתונים.');
@@ -668,241 +510,159 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         data.valueRanges.forEach((rangeData: any) => {
             const rows = rangeData.values;
             if (!rows) return;
-            
             rows.forEach((row: any[]) => {
-                const playerName = row[0]?.trim(); 
-                const pointsStr = row[10]?.trim(); 
-
+                const playerName = row[0]?.trim(); const pointsStr = row[10]?.trim(); 
                 if (playerName && playerName !== 'שם שחקן' && pointsStr) {
                     const points = parseInt(pointsStr);
                     if (!isNaN(points)) {
                         let matchedDbPlayer = dbPlayers.find(p => cleanForMatch(p.name) === cleanForMatch(playerName));
-                        
                         if (!matchedDbPlayer && playerName.includes('.')) {
                            const parts = playerName.split('.');
                            if (parts.length >= 2) {
-                               const initial = parts[0].trim().charAt(0);
-                               const lastName = cleanForMatch(parts[1]);
+                               const initial = parts[0].trim().charAt(0); const lastName = cleanForMatch(parts[1]);
                                matchedDbPlayer = dbPlayers.find(p => {
                                    const dbParts = p.name.split(' ');
-                                   if (dbParts.length >= 2) {
-                                       const dbInitial = dbParts[0].charAt(0);
-                                       const dbLast = cleanForMatch(dbParts[dbParts.length - 1]);
-                                       return initial === dbInitial && dbLast === lastName;
-                                   }
+                                   if (dbParts.length >= 2) return initial === dbParts[0].charAt(0) && cleanForMatch(dbParts[dbParts.length - 1]) === lastName;
                                    return false;
                                });
                            }
                         }
-
                         const finalName = matchedDbPlayer ? matchedDbPlayer.name : playerName;
-                        const realTeam = matchedDbPlayer ? matchedDbPlayer.team : 'לא ידוע';
-                        const fantasyTeam = matchedDbPlayer ? matchedDbPlayer.fantasyTeam : '';
-
-                        if (!playerPointsMap[finalName]) {
-                            playerPointsMap[finalName] = { points: 0, team: realTeam, fantasyTeam: fantasyTeam, rawName: finalName };
-                        }
+                        if (!playerPointsMap[finalName]) playerPointsMap[finalName] = { points: 0, team: matchedDbPlayer ? matchedDbPlayer.team : 'לא ידוע', fantasyTeam: matchedDbPlayer ? matchedDbPlayer.fantasyTeam : '', rawName: finalName };
                         playerPointsMap[finalName].points += points;
                     }
                 }
             });
         });
 
-        const topPlayers = Object.values(playerPointsMap)
-            .sort((a, b) => b.points - a.points)
-            .slice(0, 50);
-
-        await setDoc(doc(db, 'leagueData', 'top_players'), {
-            players: topPlayers.map(p => ({
-                name: p.rawName,
-                team: p.team,
-                points: p.points,
-                fantasyTeamName: p.fantasyTeam
-            })),
-            lastUpdated: new Date().toISOString()
-        });
-
+        const topPlayers = Object.values(playerPointsMap).sort((a, b) => b.points - a.points).slice(0, 50);
+        await setDoc(doc(db, 'leagueData', 'top_players'), { players: topPlayers.map(p => ({ name: p.rawName, team: p.team, points: p.points, fantasyTeamName: p.fantasyTeam })), lastUpdated: new Date().toISOString() });
         showMessage(`✅ הצלחה! האפליקציה פירקה ${roundSheets.length} מחזורים באפס תקלות! 👑`, 'success');
         setTopPlayersDriveUrl('');
 
-    } catch (err: any) {
-        console.error(err);
-        showMessage('❌ שגיאה: ' + err.message, 'error');
-    } finally {
-        setLoading(false);
-    }
+    } catch (err: any) { showMessage('❌ שגיאה: ' + err.message, 'error'); } 
+    finally { setLoading(false); }
   };
 
   const runAIImageScanner = async (file: File) => {
-    setLoading(true);
-    showMessage('סורק את הקובץ בעזרת AI... 👁️', 'info');
+    setLoading(true); showMessage('סורק את הקובץ בעזרת AI... 👁️', 'info');
     try {
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = async () => {
             const base64Data = (reader.result as string).split(',')[1];
-            const mimeType = file.type;
-            const hint = file.name;
-
-            const extractedMatches = await analyzeMatchImage(base64Data, mimeType, hint, geminiApiKey);
-            
+            const extractedMatches = await analyzeMatchImage(base64Data, file.type, file.name, geminiApiKey);
             if (extractedMatches && Array.isArray(extractedMatches)) {
-                extractedMatches.forEach((m: any) => {
-                    m.time = formatTimeWithUS(m.time);
-                    m.stadium = m.stadium || getStadium(m.homeTeam); 
-                });
+                extractedMatches.forEach((m: any) => { m.time = formatTimeWithUS(m.time); m.stadium = m.stadium || getStadium(m.homeTeam); });
             }
-            
             if (extractedMatches && extractedMatches.length > 0) {
                 const realFixturesSnap = await getDoc(doc(db, 'leagueData', 'real_fixtures'));
                 let currentMatches = realFixturesSnap.exists() ? realFixturesSnap.data().matches : [];
-                
                 const newMatches = [...currentMatches];
                 extractedMatches.forEach((m: any) => {
-                    const exists = newMatches.find(em => 
-                        normalizeTeamName(em.homeTeam) === normalizeTeamName(m.homeTeam) && 
-                        normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam) &&
-                        em.round === m.round
-                    );
+                    const exists = newMatches.find(em => normalizeTeamName(em.homeTeam) === normalizeTeamName(m.homeTeam) && normalizeTeamName(em.awayTeam) === normalizeTeamName(m.awayTeam) && em.round === m.round);
                     if (!exists) newMatches.push(m);
                 });
-
-                await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
-                    matches: newMatches,
-                    lastUpdated: new Date().toISOString()
-                });
+                await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() });
                 showMessage(`✅ סריקה הושלמה! נוספו ${newMatches.length - currentMatches.length} משחקים חדשים.`, 'success');
-            } else {
-                showMessage('❌ לא נמצאו משחקים בקובץ.', 'error');
-            }
+            } else { showMessage('❌ לא נמצאו משחקים בקובץ.', 'error'); }
             setLoading(false);
         };
-    } catch (e: any) {
-        console.error(e);
-        showMessage('❌ שגיאה בסריקת קובץ: ' + e.message, 'error');
-        setLoading(false);
-    }
+    } catch (e: any) { showMessage('❌ שגיאה בסריקת קובץ: ' + e.message, 'error'); setLoading(false); }
   };
 
-  // 🟢 פונקציות מנהל משחקים ידני 🟢
   const saveManualMatchEdit = async () => {
       if (editingMatchIndex === null || !editingMatchData) return;
       try {
-          const newMatches = [...realFixturesMatches];
-          newMatches[editingMatchIndex] = editingMatchData;
-          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
-              matches: newMatches,
-              lastUpdated: new Date().toISOString()
-          }, { merge: true });
-          showMessage('✅ המשחק נשמר בהצלחה', 'success');
-          setEditingMatchIndex(null);
-          setEditingMatchData(null);
+          const newMatches = [...realFixturesMatches]; newMatches[editingMatchIndex] = editingMatchData;
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() }, { merge: true });
+          showMessage('✅ המשחק נשמר בהצלחה', 'success'); setEditingMatchIndex(null); setEditingMatchData(null);
       } catch (e) { showMessage('❌ שגיאה בשמירת המשחק', 'error'); }
   };
 
   const syncTableFromDrive = async () => {
     if (!tableDriveUrl.trim()) return showMessage('❌ נא להזין קישור CSV תקין', 'error');
-    setLoading(true);
-    setIsSyncingTable(true);
-    showMessage('מושך נתונים מהאקסל... ⏳', 'info');
+    setLoading(true); setIsSyncingTable(true); showMessage('מושך נתונים מהאקסל... ⏳', 'info');
     try {
-        const res = await fetch(tableDriveUrl);
-        if (!res.ok) throw new Error('נכשל בהורדת הקובץ מהקישור שסופק');
-        const csvText = await res.text();
-        const rows = csvText.split('\n').map(row => parseCsvRow(row));
-        
-        const batch = writeBatch(db);
-        let updatedCount = 0;
+        const res = await fetch(tableDriveUrl); if (!res.ok) throw new Error('נכשל בהורדת הקובץ');
+        const csvText = await res.text(); const rows = csvText.split('\n').map(row => parseCsvRow(row));
+        const batch = writeBatch(db); let updatedCount = 0;
         
         for (let i = 1; i < rows.length; i++) {
-            const row = rows[i];
-            if (row.length < 5) continue;
-            
-            const teamName = row[0];
-            const played = parseInt(row[1]) || 0;
-            const gf = parseInt(row[2]) || 0;
-            const ga = parseInt(row[3]) || 0;
-            const points = parseInt(row[4]) || 0;
-            
-            const normId = getNormalizedTeamId(teamName);
+            const row = rows[i]; if (row.length < 5) continue;
+            const normId = getNormalizedTeamId(row[0]);
             const user = users.find(u => getNormalizedTeamId(u.teamName) === normId || u.id === normId);
-            
             if (user) {
-                batch.update(doc(db, 'users', user.id), {
-                    played, points, gf, ga,
-                    wins: parseInt(row[5]) || 0,
-                    draws: parseInt(row[6]) || 0,
-                    losses: parseInt(row[7]) || 0
-                });
+                batch.update(doc(db, 'users', user.id), { played: parseInt(row[1]) || 0, points: parseInt(row[4]) || 0, gf: parseInt(row[2]) || 0, ga: parseInt(row[3]) || 0, wins: parseInt(row[5]) || 0, draws: parseInt(row[6]) || 0, losses: parseInt(row[7]) || 0 });
                 updatedCount++;
             }
         }
-        await batch.commit();
-        showMessage(`✅ סונכרנו ${updatedCount} קבוצות מהאקסל בהצלחה!`, 'success');
-        setTableDriveUrl('');
-    } catch (e: any) {
-        showMessage('❌ שגיאה בסנכרון: ' + e.message, 'error');
-    } finally {
-        setLoading(false);
-        setIsSyncingTable(false);
-    }
+        await batch.commit(); showMessage(`✅ סונכרנו ${updatedCount} קבוצות מהאקסל בהצלחה!`, 'success'); setTableDriveUrl('');
+    } catch (e: any) { showMessage('❌ שגיאה בסנכרון: ' + e.message, 'error'); } 
+    finally { setLoading(false); setIsSyncingTable(false); }
+  };
+
+  const syncAllHistoryToExcel = async () => {
+    if(!window.confirm('זהירות: פעולה זו שולחת את כל נתוני ההיסטוריה לאקסל. האם האקסל נקי מכפילויות?')) return;
+    setIsSyncingHistory(true); showMessage('מתחיל סנכרון היסטורי... ⏳', 'info');
+    try {
+        const excelSyncRows: any[] = []; const TARGET_SPREADSHEET_ID = '1_tq9_QMdifGLHzw-cZVJGYRsUZ-5R5RkCyXHzkoMHS8';
+        const backupsSnap = await getDocs(collection(db, 'round_backups'));
+        if (backupsSnap.empty) throw new Error('לא נמצאו גיבויים.');
+
+        backupsSnap.forEach((docSnap) => {
+            const data = docSnap.data(); const roundNum = data.roundToRestore; const teamsAtTime = data.teamsSnapshot;
+            if (teamsAtTime && Array.isArray(teamsAtTime)) {
+                teamsAtTime.forEach((team: any) => {
+                    if (team.id === 'admin' || team.id === 'system') return;
+                    (team.published_lineup || []).forEach((player: any) => {
+                        excelSyncRows.push({ syncId: `HIST_R${roundNum}_${team.id}_${player.id}`, date: data.timestamp?.split('T')[0] || new Date().toISOString().split('T')[0], round: roundNum, fantasyTeam: TEAM_NAMES[team.id] || team.id, player: player.name, points: player.points || 0 });
+                    });
+                });
+            }
+        });
+
+        if (excelSyncRows.length === 0) throw new Error('לא נמצאו נתוני שחקנים בגיבויים.');
+        showMessage(`מכין ${excelSyncRows.length} שורות לשליחה... 🚀`, 'info');
+        const syncMatchToExcelFunc = httpsCallable(functions, 'syncMatchToExcel');
+        await syncMatchToExcelFunc({ rows: excelSyncRows, spreadsheetId: TARGET_SPREADSHEET_ID });
+        showMessage(`✅ סונכרנו בהצלחה ${excelSyncRows.length} שורות היסטוריות לאקסל!`, 'success');
+    } catch (e: any) { showMessage('❌ שגיאה בסנכרון: ' + e.message, 'error'); } 
+    finally { setIsSyncingHistory(false); }
   };
 
   const handleRestoreTeam = async (team: any) => {
       setLoading(true);
       try {
           const { deletedAt, ...teamData } = team;
-          await setDoc(doc(db, 'users', team.id), teamData);
-          await deleteDoc(doc(db, 'deleted_users', team.id));
+          await setDoc(doc(db, 'users', team.id), teamData); await deleteDoc(doc(db, 'deleted_users', team.id));
           showMessage(`✅ הקבוצה ${team.teamName} שוחזרה בהצלחה!`, 'success');
-      } catch (e) {
-          showMessage('❌ שגיאה בשחזור הקבוצה', 'error');
-      }
+      } catch (e) { showMessage('❌ שגיאה בשחזור הקבוצה', 'error'); }
       setLoading(false);
   };
 
   const handleSyncSquadsFromDrive = async () => {
     if (!squadsDriveUrl.trim()) return showMessage('❌ נא להזין קישור CSV לסגלים', 'error');
-    setLoading(true);
-    showMessage('מושך סגלים מהאקסל... ⏳', 'info');
+    setLoading(true); showMessage('מושך סגלים מהאקסל... ⏳', 'info');
     try {
-        const res = await fetch(squadsDriveUrl);
-        if (!res.ok) throw new Error('נכשל בהורדת הקובץ');
-        const csvText = await res.text();
-        const rows = csvText.split('\n').map(row => parseCsvRow(row));
-        
+        const res = await fetch(squadsDriveUrl); if (!res.ok) throw new Error('נכשל בהורדת הקובץ');
+        const csvText = await res.text(); const rows = csvText.split('\n').map(row => parseCsvRow(row));
         const teamSquads: Record<string, any[]> = {};
         
         rows.forEach((row, i) => {
             if (i === 0 || row.length < 3) return;
-            const teamKey = getNormalizedTeamId(row[0]);
-            if (!teamKey) return;
+            const teamKey = getNormalizedTeamId(row[0]); if (!teamKey) return;
             if (!teamSquads[teamKey]) teamSquads[teamKey] = [];
-            
-            teamSquads[teamKey].push({
-                name: row[1],
-                pos: row[2],
-                team: row[3] || '',
-                points: 0,
-                stats: { started: false, played60: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, red: false }
-            });
+            teamSquads[teamKey].push({ name: row[1], pos: row[2], team: row[3] || '', points: 0, stats: { started: false, played60: false, goals: 0, assists: 0, cleanSheet: false, conceded: 0, yellow: false, red: false } });
         });
 
-        const batch = writeBatch(db);
-        let count = 0;
+        const batch = writeBatch(db); let count = 0;
         users.forEach(u => {
             const key = getNormalizedTeamId(u.teamName);
-            if (teamSquads[key]) {
-                batch.update(doc(db, 'users', u.id), { squad: teamSquads[key] });
-                count++;
-            }
+            if (teamSquads[key]) { batch.update(doc(db, 'users', u.id), { squad: teamSquads[key] }); count++; }
         });
-        await batch.commit();
-        showMessage(`✅ סונכרנו סגלים ל-${count} קבוצות בהצלחה!`, 'success');
-        setSquadsDriveUrl('');
-    } catch (e: any) {
-        showMessage('❌ שגיאה בסנכרון סגלים: ' + e.message, 'error');
-    }
+        await batch.commit(); showMessage(`✅ סונכרנו סגלים ל-${count} קבוצות בהצלחה!`, 'success'); setSquadsDriveUrl('');
+    } catch (e: any) { showMessage('❌ שגיאה בסנכרון סגלים: ' + e.message, 'error'); }
     setLoading(false);
   };
 
@@ -911,25 +671,10 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       setLoading(true);
       try {
           const teamId = getNormalizedTeamId(newUser.teamName) || newUser.email.split('@')[0];
-          await setDoc(doc(db, 'users', teamId), {
-              ...newUser,
-              name: newUser.manager,
-              points: 0,
-              played: 0,
-              gf: 0, ga: 0,
-              wins: 0, draws: 0, losses: 0,
-              squad: [],
-              players: [],
-              budget: 100,
-              isApproved: true,
-              createdAt: new Date().toISOString()
-          });
-          showMessage('✅ קבוצה חדשה נוצרה בהצלחה! השתמש באיפוס סיסמה כדי לקבוע סיסמה ראשונה.', 'success');
-          setShowAddUser(false);
+          await setDoc(doc(db, 'users', teamId), { ...newUser, name: newUser.manager, points: 0, played: 0, gf: 0, ga: 0, wins: 0, draws: 0, losses: 0, squad: [], players: [], budget: 100, isApproved: true, createdAt: new Date().toISOString() });
+          showMessage('✅ קבוצה חדשה נוצרה בהצלחה!', 'success'); setShowAddUser(false);
           setNewUser({ teamName: '', manager: '', assistantName: '', email: '', assistantEmail: '', role: 'USER', isApproved: true, assistants: [] });
-      } catch (e) {
-          showMessage('❌ שגיאה ביצירת הקבוצה', 'error');
-      }
+      } catch (e) { showMessage('❌ שגיאה ביצירת הקבוצה', 'error'); }
       setLoading(false);
   };
 
@@ -938,22 +683,15 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       setLoading(true);
       try {
           await updateDoc(doc(db, 'users', editingUser.id), editingUser);
-          showMessage('✅ השינויים נשמרו בהצלחה!', 'success');
-          setEditingUser(null);
-      } catch (e) {
-          showMessage('❌ שגיאה בשמירת השינויים', 'error');
-      }
+          showMessage('✅ השינויים נשמרו בהצלחה!', 'success'); setEditingUser(null);
+      } catch (e) { showMessage('❌ שגיאה בשמירת השינויים', 'error'); }
       setLoading(false);
   };
 
   const handleSendResetEmail = async (email: string) => {
       if (!email) return showMessage('אין כתובת אימייל לשליחה', 'error');
-      try {
-          await sendPasswordResetEmail(auth, email);
-          showMessage(`✅ אימייל לאיפוס סיסמה נשלח ל-${email}`, 'success');
-      } catch (e: any) {
-          showMessage('❌ שגיאה בשליחת אימייל: ' + e.message, 'error');
-      }
+      try { await sendPasswordResetEmail(auth, email); showMessage(`✅ אימייל לאיפוס סיסמה נשלח ל-${email}`, 'success'); } 
+      catch (e: any) { showMessage('❌ שגיאה בשליחת אימייל: ' + e.message, 'error'); }
   };
 
   const executePermanentDelete = async () => {
@@ -962,68 +700,35 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       try {
           const archivedTeam = deletedTeams.find(t => t.id === deleteConfirmId);
           if (archivedTeam) {
-              await deleteDoc(doc(db, 'deleted_users', deleteConfirmId));
-              showMessage('✅ הוסרה לצמיתות מהארכיון.', 'success');
+              await deleteDoc(doc(db, 'deleted_users', deleteConfirmId)); showMessage('✅ הוסרה לצמיתות מהארכיון.', 'success');
           } else {
-              const userRef = doc(db, 'users', deleteConfirmId);
-              const userSnap = await getDoc(userRef);
+              const userRef = doc(db, 'users', deleteConfirmId); const userSnap = await getDoc(userRef);
               if (userSnap.exists()) {
-                  await setDoc(doc(db, 'deleted_users', deleteConfirmId), {
-                      ...userSnap.data(),
-                      deletedAt: new Date().toISOString()
-                  });
-                  await deleteDoc(userRef);
-                  showMessage('✅ הקבוצה הועברה לארכיון המחיקות.', 'success');
+                  await setDoc(doc(db, 'deleted_users', deleteConfirmId), { ...userSnap.data(), deletedAt: new Date().toISOString() });
+                  await deleteDoc(userRef); showMessage('✅ הקבוצה הועברה לארכיון המחיקות.', 'success');
               }
           }
           setDeleteConfirmId(null);
-      } catch (e) {
-          showMessage('❌ שגיאה בתהליך המחיקה', 'error');
-      }
+      } catch (e) { showMessage('❌ שגיאה בתהליך המחיקה', 'error'); }
       setLoading(false);
   };
 
   const handleEndSeason = async () => {
-      if (!endSeasonPwd || endSeasonPwd !== 'eran2024') {
-          return showMessage('❌ סיסמת אדמין לא נכונה!', 'error');
-      }
+      if (!endSeasonPwd || endSeasonPwd !== 'eran2024') return showMessage('❌ סיסמת אדמין לא נכונה!', 'error');
       setLoading(true);
       try {
-          const seasonData = {
-              name: seasonArchiveName,
-              cupWinner,
-              users: users.filter(u => u.id !== 'admin' && u.id !== 'system').map(u => ({ 
-                  id: u.id, 
-                  teamName: u.teamName, 
-                  points: u.points, 
-                  manager: u.name 
-              })),
-              timestamp: new Date().toISOString()
-          };
+          const seasonData = { name: seasonArchiveName, cupWinner, users: users.filter(u => u.id !== 'admin' && u.id !== 'system').map(u => ({ id: u.id, teamName: u.teamName, points: u.points, manager: u.name })), timestamp: new Date().toISOString() };
           await addDoc(collection(db, 'season_archive'), seasonData);
-          
           const batch = writeBatch(db);
           users.forEach(u => {
               if (u.id !== 'admin' && u.id !== 'system') {
-                  batch.update(doc(db, 'users', u.id), {
-                      points: 0, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0,
-                      squad: [], players: [], lineup: [], budget: 100,
-                      recentForm: [], streakFire: false, streakClown: false, ironDefense: false
-                  });
+                  batch.update(doc(db, 'users', u.id), { points: 0, played: 0, wins: 0, draws: 0, losses: 0, gf: 0, ga: 0, squad: [], players: [], lineup: [], budget: 100, recentForm: [], streakFire: false, streakClown: false, ironDefense: false });
               }
           });
-          
-          batch.update(doc(db, 'leagueData', 'fixtures'), { rounds: [] });
-          batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1 });
-          
-          await batch.commit();
-          showMessage(`🏆 עונת ${seasonArchiveName} ננעלה! האפליקציה מאופסת לעונה הבאה.`, 'success');
-          setShowEndSeason(false);
-          setEndSeasonPwd('');
-          setCupWinner('');
-      } catch (e) {
-          showMessage('❌ שגיאה בסגירת העונה', 'error');
-      }
+          batch.update(doc(db, 'leagueData', 'fixtures'), { rounds: [] }); batch.update(doc(db, 'leagueData', 'settings'), { currentRound: 1 });
+          await batch.commit(); showMessage(`🏆 עונת ${seasonArchiveName} ננעלה! האפליקציה מאופסת לעונה הבאה.`, 'success');
+          setShowEndSeason(false); setEndSeasonPwd(''); setCupWinner('');
+      } catch (e) { showMessage('❌ שגיאה בסגירת העונה', 'error'); }
       setLoading(false);
   };
 
@@ -1031,42 +736,22 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
       if(!window.confirm('למחוק משחק זה?')) return;
       try {
           const newMatches = realFixturesMatches.filter((_, i) => i !== index);
-          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
-              matches: newMatches,
-              lastUpdated: new Date().toISOString()
-          }, { merge: true });
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() }, { merge: true });
           showMessage('✅ משחק נמחק', 'success');
       } catch (e) { showMessage('❌ שגיאה במחיקת המשחק', 'error'); }
   };
 
   const addNewManualMatch = async () => {
       try {
-          const newMatches = [...realFixturesMatches, {
-              round: systemCurrentRound,
-              homeTeam: 'קבוצת בית',
-              awayTeam: 'קבוצת חוץ',
-              date: '01/01',
-              time: '20:00',
-              stadium: '',
-              tvChannel: ''
-          }];
-          await setDoc(doc(db, 'leagueData', 'real_fixtures'), {
-              matches: newMatches,
-              lastUpdated: new Date().toISOString()
-          }, { merge: true });
-          showMessage('✅ שורת משחק חדשה נוספה לסוף הרשימה!', 'success');
-          setEditingMatchIndex(newMatches.length - 1);
-          setEditingMatchData(newMatches[newMatches.length - 1]);
+          const newMatches = [...realFixturesMatches, { round: systemCurrentRound, homeTeam: 'קבוצת בית', awayTeam: 'קבוצת חוץ', date: '01/01', time: '20:00', stadium: '', tvChannel: '' }];
+          await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() }, { merge: true });
+          showMessage('✅ שורת משחק חדשה נוספה!', 'success'); setEditingMatchIndex(newMatches.length - 1); setEditingMatchData(newMatches[newMatches.length - 1]);
       } catch (e) { showMessage('❌ שגיאה ביצירת המשחק', 'error'); }
   };
 
-  // 🟢 קיבוץ משחקים לפי מחזור 🟢
   const matchesByRound = (realFixturesMatches || []).reduce((acc, match, idx) => {
-      if (!match) return acc;
-      const roundStr = match.round ? `מחזור ${match.round}` : 'מחזור לא מוגדר';
-      if (!acc[roundStr]) acc[roundStr] = [];
-      acc[roundStr].push({ ...match, originalIndex: idx });
-      return acc;
+      if (!match) return acc; const roundStr = match.round ? `מחזור ${match.round}` : 'מחזור לא מוגדר';
+      if (!acc[roundStr]) acc[roundStr] = []; acc[roundStr].push({ ...match, originalIndex: idx }); return acc;
   }, {} as Record<string, any[]>);
 
 
@@ -1102,25 +787,52 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
         {/* --- מסך הרדאר --- */}
         {activeTab === 'radar' && (
            <div className="space-y-6 animate-in fade-in zoom-in-95">
+              
+              {/* 🟢 באנר: מחוברים כרגע (Live) 🟢 */}
+              <div className="bg-slate-800/80 p-6 rounded-[32px] border border-green-500/30 shadow-xl relative overflow-hidden">
+                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                       <div className="w-12 h-12 bg-green-500/10 rounded-full flex items-center justify-center border border-green-500/30">
+                          <div className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span></div>
+                       </div>
+                       <div>
+                          <h3 className="text-xl font-black text-green-400">מחוברים כרגע (Live)</h3>
+                          <p className="text-sm text-slate-400 font-bold">מנג'רים שהאפליקציה פתוחה אצלם ברגע זה ממש.</p>
+                       </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 justify-end">
+                       {onlineUsers.length === 0 ? (
+                           <span className="bg-slate-950 px-4 py-2 rounded-xl text-slate-500 font-bold text-sm border border-slate-800">האפליקציה ריקה</span>
+                       ) : (
+                           onlineUsers.map(u => (
+                               <div key={u.id} className="bg-slate-950 px-3 py-1.5 rounded-xl border border-green-500/30 flex items-center gap-2 shadow-sm">
+                                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_#22c55e]"></div>
+                                   <span className="text-sm font-black text-white">{u.name || 'אורח'}</span>
+                               </div>
+                           ))
+                       )}
+                    </div>
+                 </div>
+              </div>
+
               <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-purple-500/30 shadow-xl relative overflow-hidden">
                  <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 blur-[50px] pointer-events-none rounded-full"></div>
                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 relative z-10 border-b border-slate-700 pb-4 gap-4">
                      <div>
-                         <h3 className="text-2xl font-black text-purple-400 flex items-center gap-2"><Eye className="w-6 h-6" /> רדאר התחברויות (Live)</h3>
-                         <p className="text-sm text-slate-400 mt-1 font-bold">מעקב בזמן אמת אחרי מנג'רים שנכנסו לאפליקציה.</p>
+                         <h3 className="text-2xl font-black text-purple-400 flex items-center gap-2"><Eye className="w-6 h-6" /> היסטוריית התחברויות</h3>
+                         <p className="text-sm text-slate-400 mt-1 font-bold">תיעוד כניסות לאפליקציה (רענון מסך / פתיחה מחדש).</p>
                      </div>
                      <div className="flex items-center gap-3">
                          <button onClick={handleClearAllLogs} disabled={loading || loginLogs.length === 0} className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-4 py-2.5 rounded-xl border border-red-500/30 flex items-center gap-2 transition-all active:scale-95 shadow-inner">
                             <Trash2 className="w-4 h-4" />
                             <span className="text-xs font-black">נקה הכל</span>
                          </button>
-
                          <button onClick={handleRefreshRadar} disabled={loading} className="bg-slate-900/50 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-xl border border-slate-600 flex items-center gap-2 transition-all active:scale-95 shadow-inner">
                             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-purple-400' : ''}`} />
                             <span className="text-xs font-black">רענן</span>
                          </button>
                          <div className="bg-purple-500/20 text-purple-400 px-4 py-2.5 rounded-xl border border-purple-500/30 flex items-center gap-2 font-black text-lg">
-                             {loginLogs.length} <span className="text-xs uppercase tracking-widest text-purple-300/70">כניסות אחרונות</span>
+                             {loginLogs.length} <span className="text-xs uppercase tracking-widest text-purple-300/70">רשומות</span>
                          </div>
                      </div>
                  </div>
@@ -1145,11 +857,15 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                                 {loginLogs.map((log) => {
                                     const dateObj = new Date(log.timestamp);
                                     const isMobile = log.deviceType === 'Mobile';
+                                    const isOnline = onlineUsers.some(u => u.email === log.email || u.name === log.name); // בדיקה האם המשתמש מחובר עכשיו
                                     
                                     return (
                                         <tr key={log.id} className="hover:bg-slate-800/50 transition-colors group">
                                             <td className="p-4">
-                                                <div className="font-black text-white group-hover:text-purple-300 transition-colors">{log.name}</div>
+                                                <div className="flex items-center gap-2">
+                                                    {isOnline && <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_#22c55e]" title="מחובר עכשיו"></div>}
+                                                    <div className="font-black text-white group-hover:text-purple-300 transition-colors">{log.name}</div>
+                                                </div>
                                                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">{log.email}</div>
                                             </td>
                                             <td className="p-4 font-bold text-slate-300">{log.teamName || '-'}</td>
@@ -1199,26 +915,32 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </button>
             </div>
 
+            {/* 🟢 בלוק חדש: שליטה בזמני המחזור 🟢 */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
-                {globalLock ? <Lock className="text-orange-500" /> : <Unlock className="text-slate-400" />} 
-                נעילת מחזור גלובלית
+                <Clock className="text-orange-500" /> שליטה בזמני המחזור (עקיפת שעון)
               </h3>
               <p className="text-slate-400 text-sm font-bold mb-6 relative z-10">
-                כשהמחזור נעול, אף מנג'ר לא יוכל לבצע חילופים או לערוך הרכבים, ללא קשר לשעות המשחקים (מנהלים עדיין יוכלו).
+                שליטת על בשעון האפליקציה. ניתן לנעול הרכבים לכולם באופן גורף, או לפתוח אותם בכוח (כדי לעקוף שעון קיץ/חורף ודחיות משחקים).
               </p>
-              <div className="flex items-center gap-4 relative z-10">
+              <div className="flex flex-col sm:flex-row items-center gap-4 relative z-10">
+                {/* כפתור נעילה */}
                 <button 
                   onClick={toggleGlobalLock} 
                   disabled={loading}
-                  className={`flex-1 md:max-w-xs py-4 px-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${globalLock ? 'bg-orange-500 text-black shadow-orange-500/30 border border-orange-400' : 'bg-slate-950 text-slate-300 border border-slate-700 hover:bg-slate-900'}`}
+                  className={`flex-1 w-full py-4 px-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${globalLock ? 'bg-orange-500 text-black shadow-orange-500/30 border border-orange-400' : 'bg-slate-950 text-slate-300 border border-slate-700 hover:bg-slate-900'}`}
                 >
-                  {globalLock ? (
-                      <><Lock className="w-5 h-5" /> המחזור נעול</>
-                  ) : (
-                      <><Unlock className="w-5 h-5" /> המחזור פתוח</>
-                  )}
+                  {globalLock ? <><Lock className="w-5 h-5" /> המחזור נעול (כולם)</> : <><Lock className="w-5 h-5 opacity-50" /> הפעל נעילה גלובלית</>}
+                </button>
+                
+                {/* כפתור פתיחה כפויה (Bypass) */}
+                <button 
+                  onClick={toggleGlobalUnlock} 
+                  disabled={loading}
+                  className={`flex-1 w-full py-4 px-6 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${globalUnlock ? 'bg-emerald-500 text-black shadow-emerald-500/30 border border-emerald-400' : 'bg-slate-950 text-slate-300 border border-slate-700 hover:bg-slate-900'}`}
+                >
+                  {globalUnlock ? <><Unlock className="w-5 h-5" /> פתיחה כפויה פעילה!</> : <><Unlock className="w-5 h-5 opacity-50" /> עקוף שעון (פתח הכל)</>}
                 </button>
               </div>
             </div>
@@ -1308,9 +1030,9 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
              <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-slate-700 shadow-xl">
                <h3 className="text-2xl font-black text-white mb-6">קבוצות בארכיון (נמחקו)</h3>
                {deletedTeams.length === 0 ? (
-                  <p className="text-slate-400 text-center py-4 bg-slate-900/50 rounded-2xl">אין קבוצות בארכיון.</p>
+                 <p className="text-slate-400 text-center py-4 bg-slate-900/50 rounded-2xl">אין קבוצות בארכיון.</p>
                ) : (
-                  <div className="space-y-4">
+                 <div className="space-y-4">
                     {deletedTeams.map(t => (
                       <div key={t.id} className="flex flex-col sm:flex-row justify-between items-center p-4 rounded-2xl bg-slate-950 border border-slate-800 gap-4">
                         <div className="text-center sm:text-right">
@@ -1323,7 +1045,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                         </div>
                       </div>
                     ))}
-                  </div>
+                 </div>
                )}
              </div>
            </div>
@@ -1344,6 +1066,23 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
                    <div><h3 className="text-2xl font-black text-rose-400 mb-2 flex items-center gap-2 relative z-10"><Megaphone className="w-6 h-6" /> בורסת השמועות</h3></div>
                    <button onClick={generateRumorPost} disabled={isGeneratingPost} className="w-full px-8 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-black py-4 rounded-xl transition-all relative z-10">ייצר שמועה חמה 🌶️</button>
                 </div>
+            </div>
+
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-cyan-500/30 shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-32 h-32 bg-cyan-500/10 blur-[50px] pointer-events-none rounded-full"></div>
+                <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Server className="text-cyan-500" /> סנכרון היסטוריית מחזורים לאקסל</h3>
+                <p className="text-slate-400 text-sm font-bold mb-6 relative z-10">
+                    פעולה זו עוברת על כל "קופסאות הגיבוי" שנוצרו בסגירות המחזורים הקודמים, ושולחת את כל תוצאות השחקנים (מכל המחזורים) במכה אחת למסד הנתונים האוטומטי באקסל (גיליון DB_Matches).
+                    <br/><span className="text-cyan-400">מומלץ לוודא שהגיליון באקסל ריק לפני הפעלה כדי למנוע כפילויות.</span>
+                </p>
+                <button 
+                    onClick={syncAllHistoryToExcel} 
+                    disabled={isSyncingHistory} 
+                    className="w-full md:w-auto px-8 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white font-black py-4 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 relative z-10"
+                >
+                    {isSyncingHistory ? <RefreshCw className="w-5 h-5 animate-spin" /> : <UploadCloud className="w-5 h-5" />}
+                    {isSyncingHistory ? 'מושך גיבויים ומשגר...' : 'סנכרן את כל ההיסטוריה לאקסל עכשיו 🚀'}
+                </button>
             </div>
 
             {/* 📸 סריקת משחקים ב-AI */}
@@ -1398,7 +1137,6 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </div>
             </div>
 
-            {/* 🟢 --- כפתור פתיחת מנהל משחקים ידני (מודל) --- 🟢 */}
             <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-emerald-500/30 shadow-xl relative overflow-hidden mt-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
                 <div className="relative z-10">
                     <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2"><Edit3 className="text-emerald-500" /> ניהול משחקים ידני</h3>
