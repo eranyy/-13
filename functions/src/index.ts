@@ -1,8 +1,8 @@
-
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onCall } from 'firebase-functions/v2/https'; // הוספנו את זה בשביל ה-CORS
 import { setGlobalOptions } from 'firebase-functions/v2';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -403,34 +403,38 @@ const scrape365 = async (roundHint?: number): Promise<any[]> => {
     }
 };
 
-export const fetchLiveFixtures = functions.https.onCall(async (data, context) => {
-    const { roundHint } = data;
+// הפונקציה החדשה והמעודכנת עם אישור CORS פתוח!
+export const fetchLiveFixtures = onCall(
+    { region: 'us-central1', cors: true }, 
+    async (request) => {
+        const { roundHint } = request.data;
 
-    const scrapers = [
-        createScraper('365Scores', scrape365),
-        createScraper('Sport5', scrapeSport5),
-        createScraper('IFA', scrapeIFA),
-        createScraper('ONE', scrapeONE),
-    ];
+        const scrapers = [
+            createScraper('365Scores', scrape365),
+            createScraper('Sport5', scrapeSport5),
+            createScraper('IFA', scrapeIFA),
+            createScraper('ONE', scrapeONE),
+        ];
 
-    for (const scraper of scrapers) {
-        try {
-            console.log(`Trying scraper: ${scraper.name}`);
-            const result = await scraper.scrape(roundHint);
+        for (const scraper of scrapers) {
+            try {
+                console.log(`Trying scraper: ${scraper.name}`);
+                const result = await scraper.scrape(roundHint);
 
-            if (result && result.length > 0) {
-                console.log(`Scraper ${scraper.name} succeeded.`);
-                return { success: true, source: scraper.name, matches: result };
-            } else {
-                console.log(`Scraper ${scraper.name} returned no data.`);
+                if (result && result.length > 0) {
+                    console.log(`Scraper ${scraper.name} succeeded.`);
+                    return { success: true, source: scraper.name, matches: result };
+                } else {
+                    console.log(`Scraper ${scraper.name} returned no data.`);
+                }
+            } catch (error: any) {
+                console.warn(`Scraper ${scraper.name} failed.`, {
+                    message: error.message,
+                });
             }
-        } catch (error: any) {
-            console.warn(`Scraper ${scraper.name} failed.`, {
-                message: error.message,
-            });
         }
-    }
 
-    console.error('All scrapers failed to fetch fixtures.');
-    throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
-});
+        console.error('All scrapers failed to fetch fixtures.');
+        throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
+    }
+);
