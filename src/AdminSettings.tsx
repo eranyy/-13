@@ -131,6 +131,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [globalLock, setGlobalLock] = useState<boolean>(false);
   const [globalUnlock, setGlobalUnlock] = useState<boolean>(false);
   const [systemCurrentRound, setSystemCurrentRound] = useState<number>(1);
+  const [scanRoundInput, setScanRoundInput] = useState<string>('');
 
   const [topPlayersDriveUrl, setTopPlayersDriveUrl] = useState('');
   const sheetsApiKey = 'AIzaSyARwamUBjcirbqFtWn_RpKkOdiHmeGlis0';
@@ -542,10 +543,12 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   // 🤖 פונקציית האוטומציה החדשה ללוח המשחקים שמחליפה את ה-AI 🤖
   const runAutoScanner = async () => {
     setLoading(true); 
-    showMessage('שואב את לוח המשחקים המעודכן ביותר מהרשת... 🤖', 'info');
+    const targetRound = scanRoundInput.trim() !== '' ? Number(scanRoundInput) : systemCurrentRound;
+    showMessage(`שואב את לוח המשחקים של מחזור ${targetRound} מהרשת... 🤖`, 'info');
+    
     try {
         const fetchFixturesFunc = httpsCallable(functions, 'fetchLiveFixtures');
-        const result: any = await fetchFixturesFunc({ roundHint: systemCurrentRound });
+        const result: any = await fetchFixturesFunc({ roundHint: targetRound });
         
         if (result.data.success) {
             const extractedMatches = result.data.matches;
@@ -568,7 +571,8 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
             });
 
             await setDoc(doc(db, 'leagueData', 'real_fixtures'), { matches: newMatches, lastUpdated: new Date().toISOString() });
-            showMessage(`✅ סריקה הושלמה בהצלחה (מקור: ${result.data.source})! ${extractedMatches.length} משחקים עודכנו.`, 'success');
+            showMessage(`✅ סריקה הושלמה למחזור ${targetRound} (מקור: ${result.data.source})! ${extractedMatches.length} משחקים נשאבו.`, 'success');
+            setScanRoundInput(''); // מנקה את השדה אחרי סריקה מוצלחת
         }
     } catch (e: any) { 
         console.error(e);
@@ -1096,9 +1100,19 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               <div className="absolute top-0 right-0 w-32 h-32 bg-fuchsia-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10"><Camera className="text-fuchsia-500" /> סריקת לוח משחקים (אוטומטית)</h3>
               <p className="text-slate-400 text-sm font-bold mb-6 relative z-10 leading-relaxed">
-                המערכת תסרוק אוטומטית את 365Scores, ערוץ הספורט ואתרי גיבוי נוספים כדי למשוך את שעות המשחקים ותוצאות הלייב של המחזור הנוכחי.
+                המערכת תסרוק אוטומטית את 365Scores, ערוץ הספורט ואתרי גיבוי נוספים כדי למשוך את שעות המשחקים ותוצאות הלייב של המחזור הנוכחי או כל מחזור עתידי שתבחר.
               </p>
               
+              <div className="flex flex-col md:flex-row gap-3 justify-center relative z-10 mb-4 max-w-md mx-auto">
+                 <input
+                    type="number"
+                    value={scanRoundInput}
+                    onChange={(e) => setScanRoundInput(e.target.value)}
+                    placeholder={`מחזור יעד (ברירת מחדל: ${systemCurrentRound})`}
+                    className="flex-1 bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-fuchsia-500 font-black text-center"
+                 />
+              </div>
+
               <div className="flex justify-center relative z-10">
                 <button 
                     onClick={runAutoScanner} 
