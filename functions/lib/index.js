@@ -47,7 +47,8 @@ const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 admin.initializeApp();
 const db = admin.firestore();
-(0, v2_1.setGlobalOptions)({ region: 'us-central1' });
+// שינינו פה את אזור השרת כדי שיתאים לאפליקציה
+(0, v2_1.setGlobalOptions)({ region: 'us-west1' });
 // region --- Copied Types from src/types.ts ---
 var UserRole;
 (function (UserRole) {
@@ -211,7 +212,6 @@ exports.scheduledSync = (0, scheduler_1.onSchedule)('every 2 minutes', async (ev
     await performSync();
 });
 // --- Web Scraping Environment ---
-// הוספנו כותרות זיהוי כדי שהאתרים לא יחסמו אותנו כבוטים
 const SCRAPER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
@@ -221,7 +221,6 @@ const createScraper = (name, scrapeFunc) => ({
     name,
     scrape: scrapeFunc,
 });
-// סידרנו את פורמט התאריך שיכלול גם שנה בצורה יפה
 const formatDate = (date) => {
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -321,8 +320,8 @@ const scrape365 = async (roundHint) => {
         return [];
     }
 };
-exports.fetchLiveFixtures = (0, https_1.onCall)({ region: 'us-central1', cors: true }, async (request) => {
-    // המרה בטוחה של המחזור למספר כדי למנוע תקלות בסינון
+// שינינו גם פה ל-us-west1!
+exports.fetchLiveFixtures = (0, https_1.onCall)({ region: 'us-west1', cors: true }, async (request) => {
     const roundHintRaw = request.data?.roundHint;
     const roundHint = roundHintRaw ? Number(roundHintRaw) : undefined;
     console.log(`Requested sync for round: ${roundHint}`);
@@ -342,7 +341,7 @@ exports.fetchLiveFixtures = (0, https_1.onCall)({ region: 'us-central1', cors: t
                 console.log(`Scraper ${scraper.name} succeeded with ${result.length} matches.`);
                 finalMatches = result;
                 successfulScraper = scraper.name;
-                break; // ברגע שאחד הצליח, אנחנו עוצרים ועוברים הלאה
+                break;
             }
             else {
                 console.log(`Scraper ${scraper.name} returned no data.`);

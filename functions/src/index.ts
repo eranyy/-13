@@ -10,7 +10,8 @@ import * as cheerio from 'cheerio';
 admin.initializeApp();
 const db = admin.firestore();
 
-setGlobalOptions({ region: 'us-central1' });
+// שינינו פה את אזור השרת כדי שיתאים לאפליקציה
+setGlobalOptions({ region: 'us-west1' });
 
 // region --- Copied Types from src/types.ts ---
 enum UserRole {
@@ -252,8 +253,6 @@ export const scheduledSync = onSchedule('every 2 minutes', async (event) => {
 });
 
 // --- Web Scraping Environment ---
-
-// הוספנו כותרות זיהוי כדי שהאתרים לא יחסמו אותנו כבוטים
 const SCRAPER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
@@ -265,7 +264,6 @@ const createScraper = (name: string, scrapeFunc: (roundHint?: number) => Promise
     scrape: scrapeFunc,
 });
 
-// סידרנו את פורמט התאריך שיכלול גם שנה בצורה יפה
 const formatDate = (date: Date) => {
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -374,10 +372,10 @@ const scrape365 = async (roundHint?: number): Promise<any[]> => {
     }
 };
 
+// שינינו גם פה ל-us-west1!
 export const fetchLiveFixtures = onCall(
-    { region: 'us-central1', cors: true }, 
+    { region: 'us-west1', cors: true }, 
     async (request) => {
-        // המרה בטוחה של המחזור למספר כדי למנוע תקלות בסינון
         const roundHintRaw = request.data?.roundHint;
         const roundHint = roundHintRaw ? Number(roundHintRaw) : undefined;
 
@@ -402,7 +400,7 @@ export const fetchLiveFixtures = onCall(
                     console.log(`Scraper ${scraper.name} succeeded with ${result.length} matches.`);
                     finalMatches = result;
                     successfulScraper = scraper.name;
-                    break; // ברגע שאחד הצליח, אנחנו עוצרים ועוברים הלאה
+                    break;
                 } else {
                     console.log(`Scraper ${scraper.name} returned no data.`);
                 }
