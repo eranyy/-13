@@ -41,7 +41,7 @@ const admin = __importStar(require("firebase-admin"));
 const functions = __importStar(require("firebase-functions"));
 const firestore_1 = require("firebase-functions/v2/firestore");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
-const https_1 = require("firebase-functions/v2/https"); // הוספנו את זה בשביל ה-CORS
+const https_1 = require("firebase-functions/v2/https");
 const v2_1 = require("firebase-functions/v2");
 const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
@@ -49,7 +49,6 @@ admin.initializeApp();
 const db = admin.firestore();
 (0, v2_1.setGlobalOptions)({ region: 'us-central1' });
 // region --- Copied Types from src/types.ts ---
-// All type definitions are included here to ensure data consistency between client and server.
 var UserRole;
 (function (UserRole) {
     UserRole["USER"] = "USER";
@@ -61,12 +60,6 @@ var UserRole;
 })(UserRole || (UserRole = {}));
 // endregion
 // region --- Logic ported from LiveArena.tsx for server-side calculation ---
-/**
- * Applies halftime substitutions to a team's published lineup.
- * @param team The team object.
- * @param currentRound The current round number.
- * @returns The final lineup after substitutions.
- */
 const applySubstitutionsToLineup = (team, currentRound) => {
     if (!team)
         return [];
@@ -83,12 +76,6 @@ const applySubstitutionsToLineup = (team, currentRound) => {
     });
     return currentLineup;
 };
-/**
- * Calculates the total live score for a team in a given round.
- * @param team The team object.
- * @param currentRound The current round number.
- * @returns The total score.
- */
 const calculateTeamScore = (team, currentRound) => {
     if (!team)
         return 0;
@@ -107,12 +94,6 @@ const calculateTeamScore = (team, currentRound) => {
     });
     return total;
 };
-/**
- * Aggregates live events (goals, cards) for a team.
- * @param team The team object.
- * @param currentRound The current round number.
- * @returns An object with counts for goals, yellows, and reds.
- */
 const getTeamLiveEvents = (team, currentRound) => {
     if (!team)
         return { goals: 0, yellows: 0, reds: 0 };
@@ -174,10 +155,6 @@ const getFormation = (lineup) => {
     return `${def}-${mid}-${fwd}`;
 };
 // endregion
-/**
- * The core logic for syncing live arena data.
- * Fetches all necessary data, performs calculations, and writes the result to a single document.
- */
 const performSync = async () => {
     console.log('Starting Live Arena sync...');
     const [settingsSnap, fixturesSnap, teamsSnap] = await Promise.all([
@@ -220,33 +197,36 @@ const performSync = async () => {
     await db.doc('liveData/arena').set(liveArenaData);
     console.log(`Live Arena sync completed successfully for round ${currentRound}.`);
 };
-// --- Function Triggers ---
-// This function is triggered whenever a user document is updated.
 exports.onUserChangeSync = (0, firestore_1.onDocumentWritten)('users/{userId}', async (event) => {
-    // We check if 'points' or 'stats' of any player has changed to avoid unnecessary runs.
     const beforeData = event.data?.before.data();
     const afterData = event.data?.after.data();
     if (JSON.stringify(beforeData?.squad) !== JSON.stringify(afterData?.squad)) {
         await performSync();
     }
 });
-// This function is triggered whenever the main fixtures document is updated.
 exports.onFixturesChangeSync = (0, firestore_1.onDocumentWritten)('leagueData/fixtures', async (event) => {
     await performSync();
 });
-// A scheduled function runs periodically as a fallback to ensure data is fresh.
 exports.scheduledSync = (0, scheduler_1.onSchedule)('every 2 minutes', async (event) => {
     await performSync();
 });
 // --- Web Scraping Environment ---
+// הוספנו כותרות זיהוי כדי שהאתרים לא יחסמו אותנו כבוטים
+const SCRAPER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7'
+};
 const createScraper = (name, scrapeFunc) => ({
     name,
     scrape: scrapeFunc,
 });
+// סידרנו את פורמט התאריך שיכלול גם שנה בצורה יפה
 const formatDate = (date) => {
     const day = String(date.getDate()).padStart(2, '0');
     const month = String(date.getMonth() + 1).padStart(2, '0');
-    return `${day}/${month}`;
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
 };
 const formatTime = (date) => {
     const hours = String(date.getHours()).padStart(2, '0');
@@ -254,13 +234,12 @@ const formatTime = (date) => {
     return `${hours}:${minutes}`;
 };
 const scrapeIFA = async (roundHint) => {
-    console.log(`Attempting to scrape IFA with round hint: ${roundHint}`);
     return [];
 };
 const scrapeSport5 = async (roundHint) => {
     console.log(`Attempting to scrape Sport5 with round hint: ${roundHint}`);
     try {
-        const { data } = await axios_1.default.get('https://www.sport5.co.il/Games.aspx?FolderID=44&lang=HE');
+        const { data } = await axios_1.default.get('https://www.sport5.co.il/Games.aspx?FolderID=44&lang=HE', { headers: SCRAPER_HEADERS });
         const $ = cheerio.load(data);
         const matches = [];
         $('.table-games tr').each((i, row) => {
@@ -271,8 +250,8 @@ const scrapeSport5 = async (roundHint) => {
                 if (columns.length > 5) {
                     const roundText = $(columns[0]).text().trim();
                     const homeTeam = $(columns[1]).text().trim();
-                    const awayTeam = $(columns[3]).text().trim();
                     const score = $(columns[2]).text().trim();
+                    const awayTeam = $(columns[3]).text().trim();
                     const date = $(columns[4]).text().trim();
                     const time = $(columns[5]).text().trim();
                     const stadium = $(columns[6]).text().trim();
@@ -306,18 +285,17 @@ const scrapeSport5 = async (roundHint) => {
         return matches;
     }
     catch (error) {
-        console.error("ScrapeSport5 failed:", { error: error.message });
+        console.error("ScrapeSport5 failed:", { error: error.message, status: error.response?.status });
         return [];
     }
 };
 const scrapeONE = async (roundHint) => {
-    console.log(`Attempting to scrape ONE with round hint: ${roundHint}`);
     return [];
 };
 const scrape365 = async (roundHint) => {
     console.log(`Attempting to scrape 365Scores with round hint: ${roundHint}`);
     try {
-        const { data } = await axios_1.default.get('https://webws.365scores.com/web/games/current/?appTypeId=5&langId=2&timezoneName=Asia/Jerusalem&competitions=11');
+        const { data } = await axios_1.default.get('https://webws.365scores.com/web/games/current/?appTypeId=5&langId=2&timezoneName=Asia/Jerusalem&competitions=11', { headers: SCRAPER_HEADERS });
         const allGames = data.games || [];
         let filteredGames = allGames;
         if (roundHint) {
@@ -339,38 +317,45 @@ const scrape365 = async (roundHint) => {
         });
     }
     catch (error) {
-        console.error("Scrape365 failed:", { error: error.message });
+        console.error("Scrape365 failed:", { error: error.message, status: error.response?.status });
         return [];
     }
 };
-// הפונקציה החדשה והמעודכנת עם אישור CORS פתוח!
 exports.fetchLiveFixtures = (0, https_1.onCall)({ region: 'us-central1', cors: true }, async (request) => {
-    const { roundHint } = request.data;
+    // המרה בטוחה של המחזור למספר כדי למנוע תקלות בסינון
+    const roundHintRaw = request.data?.roundHint;
+    const roundHint = roundHintRaw ? Number(roundHintRaw) : undefined;
+    console.log(`Requested sync for round: ${roundHint}`);
     const scrapers = [
         createScraper('365Scores', scrape365),
         createScraper('Sport5', scrapeSport5),
         createScraper('IFA', scrapeIFA),
         createScraper('ONE', scrapeONE),
     ];
+    let finalMatches = [];
+    let successfulScraper = '';
     for (const scraper of scrapers) {
         try {
             console.log(`Trying scraper: ${scraper.name}`);
             const result = await scraper.scrape(roundHint);
             if (result && result.length > 0) {
-                console.log(`Scraper ${scraper.name} succeeded.`);
-                return { success: true, source: scraper.name, matches: result };
+                console.log(`Scraper ${scraper.name} succeeded with ${result.length} matches.`);
+                finalMatches = result;
+                successfulScraper = scraper.name;
+                break; // ברגע שאחד הצליח, אנחנו עוצרים ועוברים הלאה
             }
             else {
                 console.log(`Scraper ${scraper.name} returned no data.`);
             }
         }
         catch (error) {
-            console.warn(`Scraper ${scraper.name} failed.`, {
-                message: error.message,
-            });
+            console.warn(`Scraper ${scraper.name} failed.`, { message: error.message });
         }
     }
-    console.error('All scrapers failed to fetch fixtures.');
-    throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
+    if (finalMatches.length === 0) {
+        console.error('All scrapers failed to fetch fixtures or returned empty arrays.');
+        throw new functions.https.HttpsError('internal', 'All scrapers failed to fetch data.');
+    }
+    return { success: true, source: successfulScraper, matches: finalMatches };
 });
 //# sourceMappingURL=index.js.map
