@@ -10,7 +10,6 @@ import * as cheerio from 'cheerio';
 admin.initializeApp();
 const db = admin.firestore();
 
-// שינינו פה את אזור השרת כדי שיתאים לאפליקציה
 setGlobalOptions({ region: 'us-west1' });
 
 // region --- Copied Types from src/types.ts ---
@@ -302,10 +301,16 @@ const scrapeSport5 = async (roundHint?: number): Promise<any[]> => {
                     const stadium = $(columns[6]).text().trim();
                     const status = "Scheduled"; 
 
-                    const round = parseInt(roundText, 10);
+                    // מחלץ רק מספרים כדי למנוע קריסה מול המילה "פלייאוף"
+                    const matchRound = roundText.match(/\d+/);
+                    const round = matchRound ? parseInt(matchRound[0], 10) : 0;
                     
-                    if (roundHint && round !== roundHint) {
-                        return;
+                    if (roundHint) {
+                        // הלוגיקה שממירה למספרי פלייאוף (אם גדול מ-26, פחות 26)
+                        const altRound = roundHint > 26 ? roundHint - 26 : roundHint;
+                        if (round !== roundHint && round !== altRound) {
+                            return; // מדלג אם זה לא המחזור שביקשנו או מחזור הפלייאוף המקביל
+                        }
                     }
 
                     let hs = '';
@@ -315,7 +320,7 @@ const scrapeSport5 = async (roundHint?: number): Promise<any[]> => {
                     }
 
                     matches.push({
-                        round,
+                        round: roundHint || round, // שומרים את מספר המחזור הראשי כדי שהאפליקציה שלנו תבין
                         homeTeam,
                         awayTeam,
                         date,
@@ -349,13 +354,15 @@ const scrape365 = async (roundHint?: number): Promise<any[]> => {
 
         let filteredGames = allGames;
         if (roundHint) {
-            filteredGames = allGames.filter((game: any) => game.roundNum === roundHint);
+            // הוספת התמיכה בפלייאוף: בודק גם את המחזור המקורי וגם את "הגרסה המקוצרת" של מנהלת הליגות
+            const altRound = roundHint > 26 ? roundHint - 26 : roundHint;
+            filteredGames = allGames.filter((game: any) => game.roundNum === roundHint || game.roundNum === altRound);
         }
 
         return filteredGames.map((game: any) => {
             const startTime = new Date(game.startTime);
             return {
-                round: game.roundNum,
+                round: roundHint || game.roundNum, // חשוב מאוד: אונסים את השרת לשמור תחת מחזור 33 ולא מחזור 7
                 homeTeam: game.competitors[0]?.name || '',
                 awayTeam: game.competitors[1]?.name || '',
                 date: formatDate(startTime),
@@ -372,7 +379,6 @@ const scrape365 = async (roundHint?: number): Promise<any[]> => {
     }
 };
 
-// שינינו גם פה ל-us-west1!
 export const fetchLiveFixtures = onCall(
     { region: 'us-west1', cors: true }, 
     async (request) => {
