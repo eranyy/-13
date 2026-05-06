@@ -142,6 +142,9 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
   const [editingMatchIndex, setEditingMatchIndex] = useState<number | null>(null);
   const [editingMatchData, setEditingMatchData] = useState<any>(null);
 
+  // === NEW STATE FOR TIME MACHINE ===
+  const [manualRound, setManualRound] = useState('');
+
   useEffect(() => {
     const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => setUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubDeletedUsers = onSnapshot(collection(db, "deleted_users"), (snapshot) => setDeletedTeams(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -231,6 +234,28 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
           showMessage(`✅ פתיחת מחזור (עוקף שעון) ${newUnlockState ? 'הופעלה' : 'בוטלה'}!`, 'success');
       } catch (e) { showMessage('❌ שגיאה בעדכון מצב פתיחה', 'error'); }
       setLoading(false);
+  };
+
+  // === NEW FUNCTION FOR TIME MACHINE ===
+  const handleForceRoundUpdate = async () => {
+    if (!manualRound) {
+      alert("אנא הקלד מספר מחזור תקין.");
+      return;
+    }
+    const isConfirmed = window.confirm(`האם אתה בטוח שברצונך לכפות מעבר למחזור ${manualRound}?`);
+    if (isConfirmed) {
+      try {
+        const settingsRef = doc(db, 'leagueData', 'settings');
+        await updateDoc(settingsRef, {
+          currentRound: Number(manualRound)
+        });
+        showMessage(`🔥 התיקון בוצע! המערכת הוקפצה למחזור ${manualRound}.`, 'success');
+        setManualRound('');
+      } catch (error) {
+        console.error("שגיאה בעדכון המחזור:", error);
+        showMessage("הייתה בעיה בעדכון מספר המחזור במסד הנתונים.", 'error');
+      }
+    }
   };
 
   const handleUpdateCupSettings = async (updates: any) => {
@@ -925,8 +950,34 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </button>
             </div>
 
+            {/* 🟢 בלוק: מכונת זמן (תיקון מחזור) 🟢 */}
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-blue-500/30 shadow-xl relative overflow-hidden mt-6">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 blur-[50px] pointer-events-none rounded-full"></div>
+              <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
+                ⏳ מכונת זמן (תיקון מחזור ידני)
+              </h3>
+              <p className="text-slate-400 text-sm font-bold mb-6 relative z-10">
+                השתמש בזה רק אם המערכת חזרה בטעות אחורה בזמן ומציגה מחזור ישן. הקלדת מספר כאן תשנה את המחזור הפעיל במסד הנתונים באופן מיידי.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center gap-4 relative z-10">
+                <input 
+                  type="number" 
+                  placeholder="הכנס מספר מחזור..." 
+                  value={manualRound} 
+                  onChange={(e) => setManualRound(e.target.value)}
+                  className="w-full sm:w-auto bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 font-mono text-sm"
+                />
+                <button 
+                  onClick={handleForceRoundUpdate}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 text-white py-4 px-8 rounded-xl font-black transition-all shadow-lg active:scale-95"
+                >
+                  שנה מחזור עכשיו
+                </button>
+              </div>
+            </div>
+
             {/* 🟢 בלוק: שליטה בזמני המחזור 🟢 */}
-            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden">
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-orange-500/30 shadow-xl animate-in fade-in zoom-in-95 relative overflow-hidden mt-6">
               <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/10 blur-[50px] pointer-events-none rounded-full"></div>
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2 relative z-10">
                 <Clock className="text-orange-500" /> שליטה בזמני המחזור (עקיפת שעון)
@@ -955,7 +1006,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </div>
             </div>
 
-            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-blue-500/30 shadow-xl animate-in fade-in zoom-in-95">
+            <div className="bg-slate-800 p-6 md:p-8 rounded-[32px] border border-blue-500/30 shadow-xl animate-in fade-in zoom-in-95 mt-6">
               <h3 className="text-2xl font-black text-white mb-2 flex items-center gap-2"><DownloadCloud className="text-blue-500" /> סנכרון טבלת ליגה מאקסל (אופציה ידנית/גיבוי)</h3>
               <div className="flex flex-col md:flex-row gap-3 mt-4">
                 <input type="text" value={tableDriveUrl} onChange={(e) => setTableDriveUrl(e.target.value)} placeholder="קישור CSV לטבלת הסיכום" className="flex-1 bg-black/50 border border-slate-600 p-4 rounded-xl text-white outline-none focus:border-blue-500 text-left font-mono text-sm" dir="ltr" />
@@ -963,7 +1014,7 @@ const AdminSettings: React.FC<AdminSettingsProps> = ({ onClose = () => {}, isAdm
               </div>
             </div>
 
-            <div className="bg-slate-800 p-6 rounded-[32px] border border-slate-700 shadow-xl animate-in fade-in zoom-in-95">
+            <div className="bg-slate-800 p-6 rounded-[32px] border border-slate-700 shadow-xl animate-in fade-in zoom-in-95 mt-6">
               <div className="flex justify-between items-center mb-6 border-b border-slate-700 pb-4">
                 <h3 className="text-2xl font-black text-white">ניהול נתוני קבוצות ✏️</h3>
                 <button onClick={() => setShowAddUser(true)} className="bg-green-600 hover:bg-green-500 text-white font-black py-2 px-6 rounded-xl">+ הוסף קבוצה</button>
